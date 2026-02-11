@@ -55,7 +55,8 @@ SLIPPAGE_POINTS = 10             # проскальзывание в пункт�
 GO_MARGIN = 25_000               # гарантийное обеспечение за 1 контракт RTS (руб.)
 
 TARGET_HORIZON = 6               # 6 баров = 30 минут (на 5-мин свечах)
-SIGNAL_THRESHOLD = 0.55          # порог для открытия позиции
+LONG_THRESHOLD = 0.55            # порог для лонга
+SHORT_THRESHOLD = 0.45           # порог для шорта (P(up) < 0.45 → short)
 
 # Walk-Forward
 TRAIN_BARS = 1050    # ~6 торговых дней по 175 свечей
@@ -186,7 +187,7 @@ def run_futures_backtest(
     Логика:
     - Сигнал на баре i по признакам бара i
     - Вход по open бара i+1
-    - Позиция: 1 контракт LONG или FLAT (нет шортов для простоты)
+    - Позиция: +1 (LONG), 0 (FLAT), -1 (SHORT)
     - При портфеле 100К и ГО 25К — max 4 контракта, но торгуем 1
     """
     common_idx = X.index.intersection(y.dropna().index).intersection(ohlcv.index)
@@ -200,7 +201,7 @@ def run_futures_backtest(
 
     # State
     cash = INITIAL_CAPITAL
-    position = 0  # 0 or 1 contract
+    position = 0  # -1, 0, +1
     entry_price = 0.0
     equity_curve = []
     trades = []
@@ -243,39 +244,54 @@ def run_futures_backtest(
         next_open = ohlcv.iloc[i + 1]["open"]
         current_close = ohlcv.iloc[i]["close"]
 
-        # Target position
-        target_pos = 1 if p_up > SIGNAL_THRESHOLD else 0
+        # Target position: +1 (long), 0 (flat), -1 (short)
+        if p_up > LONG_THRESHOLD:
+            target_pos = 1
+        elif p_up < SHORT_THRESHOLD:
+            target_pos = -1
+        else:
+            target_pos = 0
 
         if target_pos != position:
-            if target_pos == 1 and position == 0:
-                # BUY
-                fill_price = next_open + SLIPPAGE_POINTS
+            # Close existing position first
+            if position != 0:
+                if position == 1:
+                    fill_price = next_open - SLIPPAGE_POINTS
+                    pnl_points = fill_price - entry_price
+                else:  # position == -1
+                    fill_price = next_open + SLIPPAGE_POINTS
+                    pnl_points = entry_price - fill_price
+
+                pnl_rub = pnl_points * POINT_COST_RUB
+                fee = EXCHANGE_FEE_PER_CONTRACT
+                cash += pnl_rub - fee
+                trades.append({
+                    "bar": i + 1,
+                    "time": ohlcv.index[i + 1],
+                    "side": "CLOSE_LONG" if position == 1 else "CLOSE_SHORT",
+                    "price": fill_price,
+                    "pnl_points": pnl_points,
+                    "pnl_rub": pnl_rub,
+                    "fee": fee,
+                })
+                position = 0
+
+            # Open new position
+            if target_pos != 0:
+                if target_pos == 1:
+                    fill_price = next_open + SLIPPAGE_POINTS
+                else:
+                    fill_price = next_open - SLIPPAGE_POINTS
+
                 fee = EXCHANGE_FEE_PER_CONTRACT
                 cash -= fee
-                position = 1
+                position = target_pos
                 entry_price = fill_price
                 trades.append({
                     "bar": i + 1,
                     "time": ohlcv.index[i + 1],
-                    "side": "BUY",
+                    "side": "BUY" if target_pos == 1 else "SHORT",
                     "price": fill_price,
-                    "fee": fee,
-                })
-            elif target_pos == 0 and position == 1:
-                # SELL (close long)
-                fill_price = next_open - SLIPPAGE_POINTS
-                fee = EXCHANGE_FEE_PER_CONTRACT
-                pnl_points = fill_price - entry_price
-                pnl_rub = pnl_points * POINT_COST_RUB
-                cash += pnl_rub - fee
-                position = 0
-                trades.append({
-                    "bar": i + 1,
-                    "time": ohlcv.index[i + 1],
-                    "side": "SELL",
-                    "price": fill_price,
-                    "pnl_points": pnl_points,
-                    "pnl_rub": pnl_rub,
                     "fee": fee,
                 })
 
@@ -283,6 +299,8 @@ def run_futures_backtest(
         unrealized = 0
         if position == 1:
             unrealized = (current_close - entry_price) * POINT_COST_RUB
+        elif position == -1:
+            unrealized = (entry_price - current_close) * POINT_COST_RUB
 
         equity = cash + unrealized
         equity_curve.append({
@@ -294,15 +312,18 @@ def run_futures_backtest(
         })
 
     # Close any open position at the end
-    if position == 1 and len(ohlcv) > 0:
+    if position != 0 and len(ohlcv) > 0:
         last_price = ohlcv.iloc[-1]["close"]
-        pnl_points = last_price - entry_price
+        if position == 1:
+            pnl_points = last_price - entry_price
+        else:
+            pnl_points = entry_price - last_price
         pnl_rub = pnl_points * POINT_COST_RUB
         cash += pnl_rub - EXCHANGE_FEE_PER_CONTRACT
         trades.append({
             "bar": len(ohlcv) - 1,
             "time": ohlcv.index[-1],
-            "side": "SELL (close)",
+            "side": f"CLOSE_{'LONG' if position == 1 else 'SHORT'} (end)",
             "price": last_price,
             "pnl_points": pnl_points,
             "pnl_rub": pnl_rub,
@@ -329,22 +350,25 @@ def run_futures_backtest(
     max_dd = drawdowns.min() * 100
 
     # Trade stats
-    sell_trades = [t for t in trades if "pnl_rub" in t]
-    n_trades = len(sell_trades)
+    close_trades = [t for t in trades if "pnl_rub" in t]
+    n_trades = len(close_trades)
     total_fees = sum(t["fee"] for t in trades)
 
     if n_trades > 0:
-        wins = [t for t in sell_trades if t["pnl_rub"] > 0]
-        losses = [t for t in sell_trades if t["pnl_rub"] <= 0]
+        wins = [t for t in close_trades if t["pnl_rub"] > 0]
+        losses = [t for t in close_trades if t["pnl_rub"] <= 0]
         win_rate = len(wins) / n_trades * 100
         avg_win = np.mean([t["pnl_rub"] for t in wins]) if wins else 0
         avg_loss = np.mean([t["pnl_rub"] for t in losses]) if losses else 0
-        total_pnl = sum(t["pnl_rub"] for t in sell_trades)
+        total_pnl = sum(t["pnl_rub"] for t in close_trades)
         gross_profit = sum(t["pnl_rub"] for t in wins) if wins else 0
         gross_loss = abs(sum(t["pnl_rub"] for t in losses)) if losses else 0
         profit_factor = gross_profit / gross_loss if gross_loss > 0 else float("inf")
+        n_longs = sum(1 for t in close_trades if "LONG" in t.get("side", ""))
+        n_shorts = sum(1 for t in close_trades if "SHORT" in t.get("side", ""))
     else:
         win_rate = avg_win = avg_loss = total_pnl = profit_factor = 0
+        n_longs = n_shorts = 0
 
     return {
         "model_name": model_name,
@@ -360,6 +384,8 @@ def run_futures_backtest(
         "profit_factor": round(profit_factor, 3),
         "total_fees_rub": round(total_fees, 2),
         "total_pnl_rub": round(total_pnl, 2) if n_trades > 0 else 0,
+        "n_longs": n_longs,
+        "n_shorts": n_shorts,
         "equity_curve": eq,
         "trades": trades,
     }
@@ -538,9 +564,8 @@ def main():
             "Доход%": f"{res['total_return_pct']:+.2f}%",
             "MaxDD%": f"{res['max_drawdown_pct']:.2f}%",
             "Сделок": res["n_trades"],
-            "WinRate": f"{res['win_rate_pct']:.1f}%",
-            "Ср.Win": f"{res['avg_win_rub']:+.0f}",
-            "Ср.Loss": f"{res['avg_loss_rub']:+.0f}",
+            "L/S": f"{res.get('n_longs',0)}/{res.get('n_shorts',0)}",
+            "WR%": f"{res['win_rate_pct']:.1f}%",
             "PF": f"{res['profit_factor']:.2f}",
             "Комиссии": f"{res['total_fees_rub']:.0f}",
             "P&L": f"{res['total_pnl_rub']:+,.0f}",
