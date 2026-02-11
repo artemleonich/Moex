@@ -31,6 +31,7 @@ from sklearn.ensemble import RandomForestClassifier
 
 warnings.filterwarnings("ignore")
 
+from island_model.csv_loader import load_all_csv
 from island_model.data_loader import MOEXDataLoader
 from island_model.features import FeatureGenerator, TargetGenerator
 from island_model.island_forest import IslandForestModel
@@ -87,10 +88,20 @@ LOT_SIZES = {
 
 
 def load_data():
-    """Загрузка данных: реальные или синтетические."""
+    """Загрузка данных: CSV → MOEX API → синтетические."""
     print("\n[1/6] ЗАГРУЗКА ДАННЫХ")
     print("-" * 60)
 
+    # 1. Пробуем локальные CSV (данные из реальных контрольных точек)
+    import os
+    csv_dir = os.path.join(os.path.dirname(__file__), "data")
+    if os.path.isdir(csv_dir):
+        print(f"  Загрузка из CSV ({csv_dir}):")
+        ticker_data, usdrub, brent = load_all_csv(TICKERS, csv_dir)
+        if ticker_data:
+            return ticker_data, usdrub, brent
+
+    # 2. Пробуем MOEX ISS API
     loader = MOEXDataLoader()
     print(f"  Попытка MOEX ISS API: {TICKERS}")
     ticker_data = loader.load_multiple(TICKERS, START_DATE, END_DATE)
@@ -107,8 +118,8 @@ def load_data():
         except Exception:
             pass
     else:
-        print("  API недоступен → синтетические данные")
-        print("  (калиброваны под реальные параметры MOEX 2019-2024)\n")
+        # 3. Fallback: синтетические данные
+        print("  API недоступен → синтетические данные\n")
         ticker_data, usdrub, brent = load_synthetic_data(TICKERS, START_DATE, END_DATE)
 
     return ticker_data, usdrub, brent
