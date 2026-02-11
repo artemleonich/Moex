@@ -1,3 +1,5 @@
 __pycache__/
 *.pyc
 *.pyo
+*.qsh
+downloaded_data/qsh_files/
