@@ -1,15 +1,4 @@
-"""
-Парсер бинарного формата QSH (QScalp History Data).
-
-Поддерживает:
-- QSH v4 (gzip-сжатый)
-- Stream type: Deals (0x20) — тиковые сделки
-- LEB128 / Growing кодирование
-- Delta-encoded поля (price, datetime, id, oi)
-
-Формат документирован на https://www.qscalp.ru/
-Референсная реализация: https://github.com/StockSharp/Qsh2Bin
-"""
+# парсер QSH (QScalp) бинарного формата, v4, gzip + deals stream
 
 import gzip
 import io
@@ -20,9 +9,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# LEB128 / Growing encoding primitives
-# ─────────────────────────────────────────────────────────────────────────────
+# TODO: поддержать другие stream types кроме Deals (Quotes 0x10, OwnOrders и т.д.)
 
 def read_byte(stream: io.BytesIO) -> int:
     b = stream.read(1)
@@ -32,7 +19,7 @@ def read_byte(stream: io.BytesIO) -> int:
 
 
 def read_leb128(stream: io.BytesIO) -> int:
-    """Signed LEB128 (variable-length integer)."""
+    """Signed LEB128."""
     value = 0
     shift = 0
     while True:
@@ -58,11 +45,10 @@ def read_uleb128(stream: io.BytesIO) -> int:
         shift += 7
 
 
-ULEB128_MAX4 = 0x0FFFFFFF  # 268435455 — sentinel для Growing
-
+ULEB128_MAX4 = 0x0FFFFFFF  # sentinel для Growing
 
 def read_growing(stream: io.BytesIO, last_value: int) -> int:
-    """Growing encoding: для монотонно растущих значений (timestamp, id)."""
+    """Growing encoding — для монотонно растущих значений (timestamp, id)."""
     offset = read_uleb128(stream)
     if offset == ULEB128_MAX4:
         return last_value + read_leb128(stream)
@@ -70,7 +56,7 @@ def read_growing(stream: io.BytesIO, last_value: int) -> int:
 
 
 def read_dotnet_string(stream: io.BytesIO) -> str:
-    """Чтение строки в формате .NET BinaryReader (длина = 7-bit encoded int)."""
+    """Строка в формате .NET BinaryReader."""
     length = read_uleb128(stream)
     if length == 0:
         return ""
@@ -79,25 +65,19 @@ def read_dotnet_string(stream: io.BytesIO) -> str:
 
 
 def read_int64_le(stream: io.BytesIO) -> int:
-    """Little-endian Int64."""
     data = stream.read(8)
     return struct.unpack("<q", data)[0]
 
 
 def ticks_to_datetime(ticks: int) -> datetime:
-    """.NET DateTime.Ticks → Python datetime (UTC)."""
+    """.NET DateTime.Ticks -> Python datetime (UTC)."""
     # .NET ticks = 100-nanosecond intervals since 0001-01-01
     return datetime(1, 1, 1) + timedelta(microseconds=ticks // 10)
 
 
 def ms_to_datetime(ms: int) -> datetime:
-    """Milliseconds (.NET epoch) → Python datetime."""
     return datetime(1, 1, 1) + timedelta(milliseconds=ms)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# QSH structures
-# ─────────────────────────────────────────────────────────────────────────────
 
 STREAM_DEALS = 0x20
 
@@ -130,10 +110,6 @@ class Deal:
     oi: int    # Open Interest
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# QSH Parser
-# ─────────────────────────────────────────────────────────────────────────────
-
 class QshParser:
     """Парсер QSH файлов (v4, gzip, Deals stream)."""
 
@@ -143,17 +119,14 @@ class QshParser:
         self.deals = []
 
     def parse(self) -> list[Deal]:
-        """Парсинг файла. Возвращает список сделок."""
-        # Читаем и распаковываем
+        """Парсим файл, возвращаем список сделок."""
         with gzip.open(self.filepath, "rb") as f:
             data = f.read()
 
         stream = io.BytesIO(data)
 
-        # 1. Парсим заголовок
         self.header = self._parse_header(stream)
 
-        # 2. Парсим сделки
         if self.header.streams and self.header.streams[0].stream_type == STREAM_DEALS:
             self.deals = self._parse_deals(stream, self.header)
         else:
@@ -165,7 +138,6 @@ class QshParser:
         return self.deals
 
     def _parse_header(self, stream: io.BytesIO) -> QshHeader:
-        """Парсинг заголовка QSH."""
         # Signature: "QScalp History Data" (19 bytes, no prefix)
         sig = stream.read(19).decode("ascii")
         if sig != "QScalp History Data":
@@ -178,7 +150,6 @@ class QshParser:
         application = read_dotnet_string(stream)
         comment = read_dotnet_string(stream)
 
-        # Recording time: .NET DateTime.Ticks (Int64 LE)
         rec_ticks = read_int64_le(stream)
         recording_time = ticks_to_datetime(rec_ticks)
 
@@ -189,7 +160,7 @@ class QshParser:
             stype = read_byte(stream)
             instrument = read_dotnet_string(stream)
 
-            # Извлекаем price step из инструмента "TRANSAQ:RIH6:FUT:1:10"
+            # price step из инструмента типа "TRANSAQ:RIH6:FUT:1:10"
             parts = instrument.split(":")
             price_step = float(parts[-1]) if len(parts) >= 5 else 1.0
 
@@ -209,16 +180,15 @@ class QshParser:
         )
 
     def _parse_deals(self, stream: io.BytesIO, header: QshHeader) -> list[Deal]:
-        """Парсинг Deals stream."""
         price_step = header.streams[0].price_step
         single_stream = header.stream_count == 1
 
-        # Recording time в миллисекундах
+        # recording time в миллисекундах
         rec_ticks = int(
             (header.recording_time - datetime(1, 1, 1)).total_seconds() * 1000
         )
 
-        # Running state
+        # running state (delta-encoded поля)
         frame_ms = rec_ticks
         deal_ms = 0
         deal_id = 0
@@ -231,19 +201,16 @@ class QshParser:
 
         while True:
             try:
-                # Frame timestamp (Growing, milliseconds)
                 frame_ms = read_growing(stream, frame_ms)
 
-                # Stream index (only if multiple streams)
                 if not single_stream:
                     _stream_idx = read_byte(stream)
 
-                # Deal flags byte
+                # deal flags
                 flags = read_byte(stream)
                 deal_type = flags & 0x03
                 side = DEAL_TYPE.get(deal_type, "Unknown")
 
-                # Conditional fields
                 if flags & 0x04:  # DateTime
                     deal_ms = read_growing(stream, deal_ms)
 
@@ -262,10 +229,8 @@ class QshParser:
                 if flags & 0x80:  # OI (delta)
                     oi += read_leb128(stream)
 
-                # Конвертируем цену
                 actual_price = price_raw * price_step
 
-                # Конвертируем время
                 if deal_ms > 0:
                     ts = ms_to_datetime(deal_ms)
                 else:
@@ -285,7 +250,7 @@ class QshParser:
         return deals
 
     def to_dataframe(self) -> pd.DataFrame:
-        """Конвертация сделок в pandas DataFrame."""
+        """Сделки -> pandas DataFrame."""
         if not self.deals:
             self.parse()
 
@@ -305,15 +270,9 @@ class QshParser:
             df = df.set_index("timestamp").sort_index()
         return df
 
+    # TODO: добавить weighted avg price в ohlcv (vwap)
     def to_ohlcv(self, freq: str = "1min") -> pd.DataFrame:
-        """
-        Агрегация тиков в OHLCV свечи.
-
-        Parameters
-        ----------
-        freq : str
-            Частота свечей: '1min', '5min', '1h', '1D', etc.
-        """
+        """Агрегация тиков в OHLCV свечи (freq: '1min', '5min', '1h', '1D')."""
         df = self.to_dataframe()
         if df.empty:
             return df
@@ -323,13 +282,12 @@ class QshParser:
         ohlcv["volume"] = df["volume"].resample(freq).sum()
         ohlcv["trades"] = df["price"].resample(freq).count()
 
-        # Buy/Sell volume
         buy_mask = df["side"] == "Buy"
         sell_mask = df["side"] == "Sell"
         ohlcv["buy_volume"] = df.loc[buy_mask, "volume"].resample(freq).sum()
         ohlcv["sell_volume"] = df.loc[sell_mask, "volume"].resample(freq).sum()
 
-        # Open interest (last value per candle)
+        # OI — последнее значение за свечу
         ohlcv["oi"] = df["oi"].resample(freq).last()
 
         return ohlcv.dropna(subset=["open"])
@@ -371,10 +329,6 @@ class QshParser:
 
         return "\n".join(lines)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# CLI
-# ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import sys

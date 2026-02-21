@@ -1,14 +1,4 @@
-"""
-Портфельный бэктестер с учётом реальных торговых издержек MOEX.
-
-Ключевые принципы:
-- Нет look-ahead bias: сигнал на день T формируется по данным до T-1 включительно,
-  исполняется по цене open дня T+1 (задержка 1 день)
-- Комиссии: тариф брокера + биржевой сбор
-- Проскальзывание: моделируется как функция от спреда и объёма
-- Позиции в лотах: округление до размера лота
-- Портфельное управление: равномерная аллокация или risk parity
-"""
+# портфельный бэктестер с комиссиями MOEX
 
 import warnings
 from dataclasses import dataclass, field
@@ -18,13 +8,9 @@ import pandas as pd
 from sklearn.base import BaseEstimator, clone
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Параметры торговых издержек MOEX
-# ─────────────────────────────────────────────────────────────────────────────
-
 @dataclass
 class TradingCosts:
-    """Реалистичные торговые издержки MOEX."""
+    """Торговые издержки MOEX."""
     broker_commission: float = 0.0003   # 0.03% — типичный тариф (Тинькофф Инвестиции)
     exchange_fee: float = 0.0001        # 0.01% — биржевой сбор MOEX
     slippage_bps: float = 5.0           # базовое проскальзывание в б.п.
@@ -32,16 +18,10 @@ class TradingCosts:
 
     @property
     def total_commission(self) -> float:
-        """Суммарная комиссия за одну сторону."""
         return self.broker_commission + self.exchange_fee
 
-    def estimate_slippage(self, price: float, trade_volume: float,
-                          market_volume: float, spread_bps: float = 3.0) -> float:
-        """
-        Оценка проскальзывания как функции от:
-        - Спреда (половина спреда при market order)
-        - Market impact: пропорционален sqrt(trade_vol / market_vol)
-        """
+    def estimate_slippage(self, price, trade_volume, market_volume, spread_bps=3.0):
+        """Оценка проскальзывания: полспреда + market impact."""
         half_spread = price * spread_bps / 10000 / 2
         if market_volume > 0:
             impact = price * 0.001 * np.sqrt(trade_volume / market_volume)
@@ -50,13 +30,8 @@ class TradingCosts:
         return half_spread + impact
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Структуры данных
-# ─────────────────────────────────────────────────────────────────────────────
-
 @dataclass
 class Trade:
-    """Запись об одной сделке."""
     date: pd.Timestamp
     ticker: str
     side: str           # 'BUY' или 'SELL'
@@ -69,7 +44,6 @@ class Trade:
 
 @dataclass
 class PortfolioState:
-    """Состояние портфеля на конкретную дату."""
     date: pd.Timestamp
     cash: float
     positions: dict[str, int]       # ticker → количество акций
@@ -81,7 +55,6 @@ class PortfolioState:
 
 @dataclass
 class PortfolioBacktestResult:
-    """Результат портфельного бэктеста."""
     initial_capital: float
     trades: list[Trade] = field(default_factory=list)
     equity_curve: list[PortfolioState] = field(default_factory=list)
@@ -109,14 +82,14 @@ class PortfolioBacktestResult:
     def total_slippage(self) -> float:
         return sum(t.slippage for t in self.trades)
 
-    def daily_returns(self) -> np.ndarray:
+    def daily_returns(self):
         if len(self.equity_curve) < 2:
             return np.array([])
         equities = [s.equity for s in self.equity_curve]
         return np.diff(equities) / equities[:-1]
 
-    def sharpe_ratio(self, rf_annual: float = 0.21) -> float:
-        """Sharpe Ratio с учётом безрисковой ставки ЦБ."""
+    def sharpe_ratio(self, rf_annual=0.21):
+        """Sharpe с безрисковой ставкой ЦБ."""
         ret = self.daily_returns()
         if len(ret) == 0 or np.std(ret) == 0:
             return 0.0
@@ -124,7 +97,7 @@ class PortfolioBacktestResult:
         excess = ret - rf_daily
         return np.mean(excess) / np.std(excess) * np.sqrt(252)
 
-    def sortino_ratio(self, rf_annual: float = 0.21) -> float:
+    def sortino_ratio(self, rf_annual=0.21):
         ret = self.daily_returns()
         if len(ret) == 0:
             return 0.0
@@ -135,7 +108,7 @@ class PortfolioBacktestResult:
             return 0.0
         return np.mean(excess) / np.std(downside) * np.sqrt(252)
 
-    def max_drawdown(self) -> float:
+    def max_drawdown(self):
         if len(self.equity_curve) < 2:
             return 0.0
         equities = np.array([s.equity for s in self.equity_curve])
@@ -143,7 +116,7 @@ class PortfolioBacktestResult:
         drawdowns = (equities - running_max) / running_max
         return float(np.min(drawdowns))
 
-    def profit_factor(self) -> float:
+    def profit_factor(self):
         ret = self.daily_returns()
         gains = ret[ret > 0].sum()
         losses = abs(ret[ret < 0].sum())
@@ -151,7 +124,7 @@ class PortfolioBacktestResult:
             return float("inf") if gains > 0 else 0.0
         return gains / losses
 
-    def calmar_ratio(self) -> float:
+    def calmar_ratio(self):
         if len(self.equity_curve) < 2:
             return 0.0
         n_days = len(self.equity_curve)
@@ -161,13 +134,13 @@ class PortfolioBacktestResult:
             return 0.0
         return ann_ret / mdd
 
-    def win_rate(self) -> float:
+    def win_rate(self):
         ret = self.daily_returns()
         if len(ret) == 0:
             return 0.0
         return np.mean(ret > 0)
 
-    def summary(self) -> dict:
+    def summary(self):
         n_days = len(self.equity_curve)
         ann_factor = 252 / n_days if n_days > 0 else 1
         return {
@@ -188,29 +161,18 @@ class PortfolioBacktestResult:
         }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Портфельный бэктестер
-# ─────────────────────────────────────────────────────────────────────────────
-
 class PortfolioBacktester:
-    """
-    Walk-Forward портфельный бэктестер.
-
-    Логика (без look-ahead bias):
-    1. На день T: обучаем модель на данных [T-train_days, T-embargo-1]
-    2. Генерируем сигнал по признакам дня T-1 (последние известные данные)
-    3. Исполняем сделку по цене open дня T+execution_delay
-    """
+    """Walk-forward бэктестер: обучение → сигнал → исполнение с задержкой."""
 
     def __init__(
         self,
-        initial_capital: float = 100_000,
-        train_days: int = 252,
-        retrain_every: int = 21,  # переобучение раз в месяц
-        embargo_days: int = 5,
-        costs: TradingCosts | None = None,
-        max_position_pct: float = 0.25,  # максимум 25% на один тикер
-        lot_sizes: dict[str, int] | None = None,
+        initial_capital=100_000,
+        train_days=252,
+        retrain_every=21,  # переобучение раз в месяц
+        embargo_days=5,
+        costs=None,
+        max_position_pct=0.25,  # максимум 25% на один тикер
+        lot_sizes=None,
     ):
         self.initial_capital = initial_capital
         self.train_days = train_days
@@ -220,22 +182,8 @@ class PortfolioBacktester:
         self.max_position_pct = max_position_pct
         self.lot_sizes = lot_sizes or {}
 
-    def run(
-        self,
-        model: BaseEstimator,
-        ticker_datasets: dict[str, tuple[pd.DataFrame, pd.Series, pd.DataFrame]],
-        model_name: str = "Model",
-    ) -> PortfolioBacktestResult:
-        """
-        Parameters
-        ----------
-        model : BaseEstimator
-            Модель для клонирования на каждое переобучение.
-        ticker_datasets : dict
-            {ticker: (X_features, y_target, ohlcv_df)}
-        model_name : str
-            Название модели.
-        """
+    def run(self, model, ticker_datasets, model_name="Model"):
+        """Запуск бэктеста: model — sklearn-модель, ticker_datasets — {ticker: (X, y, ohlcv)}."""
         result = PortfolioBacktestResult(initial_capital=self.initial_capital)
         cash = self.initial_capital
         positions = {t: 0 for t in ticker_datasets}  # акции (не лоты)
@@ -260,7 +208,7 @@ class PortfolioBacktester:
         for day_idx in range(start_idx, len(all_dates)):
             current_date = all_dates[day_idx]
 
-            # ─── Переобучение модели (если пришло время) ───
+            # Переобучение модели (если пришло время)
             if day_idx - last_train_day >= self.retrain_every or current_model is None:
                 train_end = day_idx - self.embargo_days - self.costs.execution_delay_days
                 train_start = max(0, train_end - self.train_days)
@@ -298,7 +246,7 @@ class PortfolioBacktester:
             if current_model is None:
                 continue
 
-            # ─── Генерация сигналов (по данным до current_date - delay) ───
+            # Генерация сигналов (по данным до current_date - delay)
             signal_date_idx = day_idx - self.costs.execution_delay_days
             if signal_date_idx < 0 or signal_date_idx >= len(all_dates):
                 continue
@@ -316,9 +264,8 @@ class PortfolioBacktester:
                 except Exception:
                     signals[ticker] = 0.5
 
-            # ─── Целевые позиции ───
-            # Стратегия: long если P(up) > 0.55, short/cash если P(up) < 0.45
-            # Простая версия: long/cash (без шортов на MOEX основная секция)
+            # Целевые позиции
+            # long если P(up) > 0.55, cash если P(up) < 0.45 (без шортов на MOEX)
             target_positions = {}
             n_longs = sum(1 for s in signals.values() if s > 0.55)
 
@@ -339,7 +286,7 @@ class PortfolioBacktester:
                 else:
                     target_positions[ticker] = 0
 
-            # ─── Исполнение сделок ───
+            # Исполнение сделок
             for ticker, (X, y, ohlcv) in ticker_datasets.items():
                 if current_date not in ohlcv.index:
                     continue
@@ -402,7 +349,7 @@ class PortfolioBacktester:
                 )
                 result.trades.append(trade)
 
-            # ─── Оценка портфеля на конец дня ───
+            # Оценка портфеля на конец дня
             portfolio_value = cash
             current_prices = {}
             for ticker, (X, y, ohlcv) in ticker_datasets.items():
@@ -448,12 +395,7 @@ class PortfolioBacktester:
         return value
 
 
-def run_buy_and_hold_portfolio(
-    initial_capital: float,
-    ticker_datasets: dict[str, tuple[pd.DataFrame, pd.Series, pd.DataFrame]],
-    costs: TradingCosts,
-    lot_sizes: dict[str, int],
-) -> PortfolioBacktestResult:
+def run_buy_and_hold_portfolio(initial_capital, ticker_datasets, costs, lot_sizes):
     """Buy & Hold бенчмарк: покупаем в первый день, держим до конца."""
     result = PortfolioBacktestResult(initial_capital=initial_capital)
     cash = initial_capital

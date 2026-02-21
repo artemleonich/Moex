@@ -1,22 +1,5 @@
 #!/usr/bin/env python3
-"""
-Портфельный бэктест островной модели на MOEX с портфелем 100 000 руб.
-
-Ключевые принципы:
-- Нет look-ahead bias: сигнал формируется по данным T-1, исполняется по open T+1
-- Комиссии: 0.03% брокер + 0.01% биржа = 0.04% за сторону
-- Проскальзывание: half-spread + market impact
-- Задержка исполнения: 1 торговый день
-- Позиции в лотах MOEX
-- Переобучение раз в 21 торговый день (~месяц)
-- Walk-Forward: 252 дня обучение, 5 дней embargo
-
-Сравнение:
-1. IslandForest (6 островов, 3 миграции)
-2. RandomForest (то же кол-во деревьев)
-3. LightGBM
-4. Buy & Hold
-"""
+"""Портфельный бэктест островной модели на MOEX (100k руб)."""
 
 import sys
 import warnings
@@ -49,10 +32,7 @@ try:
 except ImportError:
     HAS_LGBM = False
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Конфигурация
-# ─────────────────────────────────────────────────────────────────────────────
-
 INITIAL_CAPITAL = 100_000  # 100 тыс. руб.
 TICKERS = ["SBER", "GAZP", "LKOH", "ROSN", "GMKN"]
 START_DATE = "2019-01-01"
@@ -88,11 +68,10 @@ LOT_SIZES = {
 
 
 def load_data():
-    """Загрузка данных: CSV → MOEX API → синтетические."""
-    print("\n[1/6] ЗАГРУЗКА ДАННЫХ")
-    print("-" * 60)
+    """Загрузка данных: CSV, MOEX API или синтетика."""
+    print("\nЗагрузка данных...")
 
-    # 1. Пробуем локальные CSV (данные из реальных контрольных точек)
+    # Пробуем локальные CSV
     import os
     csv_dir = os.path.join(os.path.dirname(__file__), "data")
     if os.path.isdir(csv_dir):
@@ -101,7 +80,7 @@ def load_data():
         if ticker_data:
             return ticker_data, usdrub, brent
 
-    # 2. Пробуем MOEX ISS API
+    # Пробуем MOEX ISS API
     loader = MOEXDataLoader()
     print(f"  Попытка MOEX ISS API: {TICKERS}")
     ticker_data = loader.load_multiple(TICKERS, START_DATE, END_DATE)
@@ -118,17 +97,16 @@ def load_data():
         except Exception:
             pass
     else:
-        # 3. Fallback: синтетические данные
-        print("  API недоступен → синтетические данные\n")
+        # Fallback: синтетические данные
+        print("  API недоступен, синтетические данные\n")
         ticker_data, usdrub, brent = load_synthetic_data(TICKERS, START_DATE, END_DATE)
 
     return ticker_data, usdrub, brent
 
 
 def prepare_datasets(ticker_data, usdrub, brent):
-    """Генерация признаков, таргетов; возврат {ticker: (X, y, ohlcv)}."""
-    print("\n[2/6] ГЕНЕРАЦИЯ ПРИЗНАКОВ")
-    print("-" * 60)
+    """Генерация признаков и таргетов."""
+    print("\nГенерация признаков...")
 
     feat_gen = FeatureGenerator(windows=[5, 10, 20, 60])
     tgt_gen = TargetGenerator(horizon=TARGET_HORIZON)
@@ -151,7 +129,7 @@ def prepare_datasets(ticker_data, usdrub, brent):
 
 
 def create_models():
-    """Модели для сравнения."""
+    """Создание моделей для сравнения."""
     models = {}
 
     models["IslandForest"] = IslandForestModel(
@@ -192,7 +170,7 @@ def create_models():
 
 
 def run_model_backtest(model, model_name, datasets):
-    """Запуск портфельного бэктеста для одной модели."""
+    """Запуск бэктеста для одной модели."""
     backtester = PortfolioBacktester(
         initial_capital=INITIAL_CAPITAL,
         train_days=TRAIN_DAYS,
@@ -206,8 +184,8 @@ def run_model_backtest(model, model_name, datasets):
     return result
 
 
-def plot_equity_curves(results: dict[str, PortfolioBacktestResult], output_path: str):
-    """Визуализация equity curve для всех моделей."""
+def plot_equity_curves(results, output_path):
+    """Графики equity и drawdown."""
     fig, axes = plt.subplots(2, 1, figsize=(14, 10), gridspec_kw={"height_ratios": [3, 1]})
 
     # Equity Curves
@@ -247,8 +225,8 @@ def plot_equity_curves(results: dict[str, PortfolioBacktestResult], output_path:
     print(f"\n  Equity curve saved: {output_path}")
 
 
-def print_trade_analysis(result: PortfolioBacktestResult, name: str):
-    """Анализ сделок."""
+def print_trade_analysis(result, name):
+    """Печать статистики по сделкам."""
     if not result.trades:
         print(f"  {name}: нет сделок")
         return
@@ -257,11 +235,9 @@ def print_trade_analysis(result: PortfolioBacktestResult, name: str):
     buys = [t for t in trades if t.side == "BUY"]
     sells = [t for t in trades if t.side == "SELL"]
 
-    # Средняя комиссия на сделку
     avg_commission = np.mean([t.commission for t in trades])
     avg_slippage = np.mean([t.slippage for t in trades])
 
-    # По тикерам
     tickers_traded = set(t.ticker for t in trades)
     print(f"\n  Анализ сделок — {name}:")
     print(f"    Всего сделок: {len(trades)} (BUY={len(buys)}, SELL={len(sells)})")
@@ -272,36 +248,32 @@ def print_trade_analysis(result: PortfolioBacktestResult, name: str):
 
 
 def main():
-    print("=" * 70)
-    print("ПОРТФЕЛЬНЫЙ БЭКТЕСТ — ОСТРОВНАЯ МОДЕЛЬ НА MOEX")
-    print(f"Портфель: {INITIAL_CAPITAL:,.0f} руб.")
-    print(f"Период: {START_DATE} — {END_DATE}")
+    print(f"Портфельный бэктест островной модели на MOEX")
+    print(f"Портфель: {INITIAL_CAPITAL:,.0f} руб. | {START_DATE} -- {END_DATE}")
     print(f"Тикеры: {', '.join(TICKERS)}")
-    print(f"Комиссия: {COSTS.total_commission:.2%} за сторону")
-    print(f"Проскальзывание: ~{COSTS.slippage_bps:.0f} б.п.")
-    print(f"Задержка исполнения: {COSTS.execution_delay_days} день")
-    print(f"Переобучение: каждые {RETRAIN_EVERY} дней")
-    print("=" * 70)
+    print(f"Комиссия: {COSTS.total_commission:.2%}/сторону, "
+          f"проскальзывание ~{COSTS.slippage_bps:.0f} б.п., "
+          f"задержка {COSTS.execution_delay_days} день, "
+          f"retrain каждые {RETRAIN_EVERY} дней")
 
-    # 1. Загрузка данных
+    # Загрузка данных
     ticker_data, usdrub, brent = load_data()
     if not ticker_data:
         print("ОШИБКА: нет данных")
         sys.exit(1)
 
-    # 2. Признаки
+    # Признаки
     datasets = prepare_datasets(ticker_data, usdrub, brent)
     if not datasets:
         print("ОШИБКА: нет datasets")
         sys.exit(1)
 
-    # 3. Модели
+    # Модели
     models = create_models()
-    print(f"\n[3/6] МОДЕЛИ: {', '.join(models.keys())} + Buy&Hold")
+    print(f"\nМодели: {', '.join(models.keys())} + Buy&Hold")
 
-    # 4. Бэктест
-    print(f"\n[4/6] ПОРТФЕЛЬНЫЙ БЭКТЕСТ")
-    print("=" * 60)
+    # Бэктест
+    print(f"\nЗапуск бэктеста...")
 
     results = {}
     for name, model in models.items():
@@ -322,9 +294,8 @@ def main():
         print(f"OK — equity {bnh.final_equity:,.0f} руб. "
               f"({bnh.total_return:+.2%})")
 
-    # 5. Результаты
-    print(f"\n[5/6] ИТОГОВЫЕ РЕЗУЛЬТАТЫ")
-    print("=" * 70)
+    # Результаты
+    print(f"\nИтоговые результаты:")
 
     summary_rows = []
     for name, res in results.items():
@@ -335,13 +306,11 @@ def main():
     print("\n" + df.to_string())
 
     # Анализ сделок
-    print(f"\n{'─' * 70}")
     for name, res in results.items():
         print_trade_analysis(res, name)
 
-    # Анализ издержек vs P&L
-    print(f"\n{'─' * 70}")
-    print("ВЛИЯНИЕ ИЗДЕРЖЕК НА P&L:")
+    # Влияние издержек
+    print(f"\nВлияние издержек на P&L:")
     for name, res in results.items():
         pnl = res.final_equity - res.initial_capital
         costs_total = res.total_commissions + res.total_slippage
@@ -350,17 +319,14 @@ def main():
               f"Издержки={costs_total:8,.0f} руб. ({costs_pct:.2f}% от капитала) | "
               f"P&L без издержек={pnl + costs_total:+10,.0f} руб.")
 
-    # 6. Графики
-    print(f"\n[6/6] ВИЗУАЛИЗАЦИЯ")
-    print("-" * 60)
+    # Графики
+    print(f"\nСохранение графиков...")
     try:
         plot_equity_curves(results, "/home/user/Moex/equity_curves.png")
     except Exception as e:
         print(f"  Ошибка графика: {e}")
 
-    print(f"\n{'━' * 70}")
-    print("БЭКТЕСТ ЗАВЕРШЁН")
-    print(f"{'━' * 70}")
+    print("\nБэктест завершён.")
 
 
 if __name__ == "__main__":

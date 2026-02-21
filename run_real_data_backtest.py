@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""
-Портфельный бэктест Island Model на РЕАЛЬНЫХ данных MOEX.
-
-Данные: SBER (1999-2024) и GAZP (2006-2024) — реальные дневные OHLCV
-с Московской биржи (загружены из открытых источников).
-
-Тестовый период: 2015-01-01 — 2024-12-31 (10 лет)
-Модели: IslandForest, RandomForest, LightGBM, Buy & Hold
-"""
+"""Бэктест Island Model на реальных данных MOEX (SBER+GAZP, 2015-2024)."""
 
 import os
 import sys
@@ -37,9 +29,7 @@ try:
 except ImportError:
     HAS_LGBM = False
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Конфигурация
-# ─────────────────────────────────────────────────────────────────────────────
 
 INITIAL_CAPITAL = 100_000  # 100 тыс. руб.
 TICKERS = ["SBER", "GAZP"]
@@ -76,8 +66,7 @@ DATA_DIR = os.path.join(os.path.dirname(__file__), "downloaded_data", "csv_files
 
 def load_real_data():
     """Загрузка реальных данных MOEX из CSV."""
-    print("\n[1/6] ЗАГРУЗКА РЕАЛЬНЫХ ДАННЫХ MOEX")
-    print("-" * 60)
+    print("\nЗагрузка данных MOEX")
 
     ticker_data = {}
     for ticker in TICKERS:
@@ -102,7 +91,7 @@ def load_real_data():
         print(f"  {ticker}: {len(df)} дней "
               f"({df.index[0].date()} — {df.index[-1].date()}) "
               f"close {df['close'].iloc[0]:.2f} → {df['close'].iloc[-1]:.2f}"
-              f"{f'  ⚠ {n_invalid} OHLC errors' if n_invalid > 0 else ''}")
+              f"{f'  {n_invalid} OHLC errors' if n_invalid > 0 else ''}")
 
         ticker_data[ticker] = df[["open", "high", "low", "close", "volume"]]
 
@@ -112,18 +101,17 @@ def load_real_data():
         moex_closed_end = pd.Timestamp("2022-03-24")
         closed_days = df.loc[moex_closed_start:moex_closed_end]
         if len(closed_days) > 0:
-            print(f"\n  ⚠ {ticker}: {len(closed_days)} дней в период закрытия MOEX "
+            print(f"\n  {ticker}: {len(closed_days)} дней в период закрытия MOEX "
                   f"(25.02-24.03.2022) — реальные данные")
         else:
-            print(f"  ✓ {ticker}: Нет торговли в период закрытия MOEX")
+            print(f"  {ticker}: Нет торговли в период закрытия MOEX")
 
     return ticker_data
 
 
 def prepare_datasets(ticker_data):
     """Генерация признаков и таргетов."""
-    print("\n[2/6] ГЕНЕРАЦИЯ ПРИЗНАКОВ")
-    print("-" * 60)
+    print("\nГенерация признаков")
 
     feat_gen = FeatureGenerator(windows=[5, 10, 20, 60])
     tgt_gen = TargetGenerator(horizon=TARGET_HORIZON)
@@ -148,7 +136,6 @@ def prepare_datasets(ticker_data):
 
 
 def create_models():
-    """Модели для сравнения."""
     models = {}
 
     models["IslandForest"] = IslandForestModel(
@@ -189,7 +176,6 @@ def create_models():
 
 
 def run_model_backtest(model, model_name, datasets):
-    """Запуск портфельного бэктеста."""
     backtester = PortfolioBacktester(
         initial_capital=INITIAL_CAPITAL,
         train_days=TRAIN_DAYS,
@@ -203,7 +189,6 @@ def run_model_backtest(model, model_name, datasets):
 
 
 def plot_equity_curves(results, output_path):
-    """Визуализация equity curve."""
     fig, axes = plt.subplots(2, 1, figsize=(14, 10), gridspec_kw={"height_ratios": [3, 1]})
 
     ax1 = axes[0]
@@ -247,7 +232,6 @@ def plot_equity_curves(results, output_path):
 
 
 def main():
-    print("=" * 70)
     print("ПОРТФЕЛЬНЫЙ БЭКТЕСТ НА РЕАЛЬНЫХ ДАННЫХ MOEX")
     print(f"Портфель: {INITIAL_CAPITAL:,.0f} руб.")
     print(f"Период: {START_DATE} — {END_DATE}")
@@ -256,7 +240,6 @@ def main():
     print(f"Проскальзывание: ~{COSTS.slippage_bps:.0f} б.п.")
     print(f"Задержка исполнения: {COSTS.execution_delay_days} день")
     print(f"Переобучение: каждые {RETRAIN_EVERY} дней")
-    print("=" * 70)
 
     # 1. Загрузка данных
     ticker_data = load_real_data()
@@ -269,11 +252,10 @@ def main():
 
     # 3. Модели
     models = create_models()
-    print(f"\n[3/6] МОДЕЛИ: {', '.join(models.keys())} + Buy&Hold")
+    print(f"\nМодели: {', '.join(models.keys())} + Buy&Hold")
 
     # 4. Бэктест
-    print(f"\n[4/6] ПОРТФЕЛЬНЫЙ БЭКТЕСТ")
-    print("=" * 60)
+    print(f"\nЗапуск бэктеста")
 
     results = {}
     for name, model in models.items():
@@ -295,8 +277,7 @@ def main():
               f"({bnh.total_return:+.2%})")
 
     # 5. Результаты
-    print(f"\n[5/6] ИТОГОВЫЕ РЕЗУЛЬТАТЫ")
-    print("=" * 70)
+    print(f"\nИтоговые результаты")
 
     summary_rows = []
     for name, res in results.items():
@@ -307,7 +288,7 @@ def main():
     print("\n" + df.to_string())
 
     # Анализ сделок
-    print(f"\n{'─' * 70}")
+    print()
     for name, res in results.items():
         if not res.trades:
             print(f"  {name}: нет сделок")
@@ -320,7 +301,7 @@ def main():
               f"средняя комиссия={avg_commission:.2f} руб.")
 
     # Анализ кризиса 2022
-    print(f"\n{'─' * 70}")
+    print()
     print("АНАЛИЗ КРИЗИСА ФЕВРАЛЯ 2022:")
     for name, res in results.items():
         if not res.equity_curve:
@@ -338,7 +319,7 @@ def main():
                   f"({loss_pct:+.1f}%)")
 
     # Издержки vs P&L
-    print(f"\n{'─' * 70}")
+    print()
     print("ВЛИЯНИЕ ИЗДЕРЖЕК НА P&L:")
     for name, res in results.items():
         pnl = res.final_equity - res.initial_capital
@@ -349,7 +330,7 @@ def main():
               f"P&L без издержек={pnl + costs_total:+10,.0f} руб.")
 
     # Сравнение с банковским депозитом
-    print(f"\n{'─' * 70}")
+    print()
     print("СРАВНЕНИЕ С БАНКОВСКИМ ДЕПОЗИТОМ:")
     # Средняя ставка ЦБ за 2015-2024 ~10%
     avg_rate = 0.10
@@ -362,16 +343,13 @@ def main():
         print(f"  {name:15s} vs депозит: {diff:+,.0f} руб.")
 
     # 6. Графики
-    print(f"\n[6/6] ВИЗУАЛИЗАЦИЯ")
-    print("-" * 60)
+    print(f"\nВизуализация")
     try:
         plot_equity_curves(results, "/home/user/Moex/equity_real_data.png")
     except Exception as e:
         print(f"  Ошибка графика: {e}")
 
-    print(f"\n{'━' * 70}")
-    print("БЭКТЕСТ НА РЕАЛЬНЫХ ДАННЫХ ЗАВЕРШЁН")
-    print(f"{'━' * 70}")
+    print("\nБэктест на реальных данных завершён.")
 
 
 if __name__ == "__main__":

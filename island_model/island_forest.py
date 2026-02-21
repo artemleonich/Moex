@@ -1,10 +1,4 @@
-"""
-IslandForestModel — островная модель ансамбля случайных лесов.
-
-Каждый остров — независимый RF/ExtraTrees с уникальными гиперпараметрами.
-Кольцевая миграция лучших деревьев между островами снижает корреляцию ρ.
-Взвешенное агрегирование предсказаний на основе валидационной точности.
-"""
+# Island model ensemble of random forests with ring migration
 
 import copy
 
@@ -22,26 +16,7 @@ def _fit_island(island, X, y):
 
 
 class IslandForestModel(BaseEstimator, ClassifierMixin):
-    """
-    Островная модель ансамбля случайных лесов.
-
-    Parameters
-    ----------
-    n_islands : int
-        Количество островов (подпопуляций).
-    trees_per_island : int
-        Количество деревьев на острове.
-    n_migrations : int
-        Количество раундов миграции после обучения.
-    migration_rate : float
-        Доля мигрирующих деревьев (0, 1).
-    val_fraction : float
-        Доля данных для внутренней валидации (хронологическая).
-    n_jobs : int
-        Параллелизм (-1 = все ядра).
-    random_state : int
-        Зерно генератора.
-    """
+    """Островная модель ансамбля случайных лесов с кольцевой миграцией деревьев."""
 
     ISLAND_CONFIGS = [
         {"max_depth": None, "max_features": "sqrt", "min_samples_leaf": 1},
@@ -54,13 +29,13 @@ class IslandForestModel(BaseEstimator, ClassifierMixin):
 
     def __init__(
         self,
-        n_islands: int = 6,
-        trees_per_island: int = 50,
-        n_migrations: int = 3,
-        migration_rate: float = 0.1,
-        val_fraction: float = 0.2,
-        n_jobs: int = -1,
-        random_state: int = 42,
+        n_islands=6,
+        trees_per_island=50,
+        n_migrations=3,
+        migration_rate=0.1,
+        val_fraction=0.2,
+        n_jobs=-1,
+        random_state=42,
     ):
         self.n_islands = n_islands
         self.trees_per_island = trees_per_island
@@ -70,7 +45,7 @@ class IslandForestModel(BaseEstimator, ClassifierMixin):
         self.n_jobs = n_jobs
         self.random_state = random_state
 
-    def _create_island(self, idx: int):
+    def _create_island(self, idx):
         """Создание острова с уникальными гиперпараметрами."""
         cfg = self.ISLAND_CONFIGS[idx % len(self.ISLAND_CONFIGS)]
         # Каждый 3-й остров — ExtraTrees для дополнительного разнообразия
@@ -82,19 +57,16 @@ class IslandForestModel(BaseEstimator, ClassifierMixin):
             **cfg,
         )
 
-    def _score_trees(self, island, X_val, y_val) -> list[float]:
-        """Оценка каждого дерева острова на валидационных данных."""
+    def _score_trees(self, island, X_val, y_val):
+        """Оценка каждого дерева острова на валидации."""
         scores = []
         for tree in island.estimators_:
             pred = tree.predict(X_val)
             scores.append(accuracy_score(y_val, pred))
         return scores
 
-    def _migrate_ring(self, islands: list, X_val, y_val) -> list:
-        """
-        Кольцевая миграция: остров i отправляет лучших → остров (i+1) % K.
-        Лучшие эмигранты → случайная замена (а не худших) для сохранения разнообразия.
-        """
+    def _migrate_ring(self, islands, X_val, y_val):
+        """Кольцевая миграция: лучшие деревья острова i уходят в остров (i+1) % K."""
         n_mig = max(1, int(self.trees_per_island * self.migration_rate))
         all_scores = [self._score_trees(isl, X_val, y_val) for isl in islands]
 
@@ -112,23 +84,16 @@ class IslandForestModel(BaseEstimator, ClassifierMixin):
             ]
 
             # Случайная замена в приёмнике (не худших — для сохранения разнообразия)
-            tgt_indices = rng.choice(
+            tgt_idx = rng.choice(
                 len(islands[tgt].estimators_), size=n_mig, replace=False
             )
-            for k, idx in enumerate(tgt_indices):
+            for k, idx in enumerate(tgt_idx):
                 islands[tgt].estimators_[idx] = best_trees[k]
 
         return islands
 
     def fit(self, X, y):
-        """
-        Обучение островной модели.
-
-        1. Хронологическое разделение на train/val.
-        2. Параллельное обучение всех островов.
-        3. n_migrations раундов кольцевой миграции.
-        4. Вычисление весов островов по валидационной точности.
-        """
+        """Обучение: split -> fit islands -> migrate -> compute weights."""
         X_arr = np.asarray(X)
         y_arr = np.asarray(y)
 
@@ -171,30 +136,24 @@ class IslandForestModel(BaseEstimator, ClassifierMixin):
         proba = self.predict_proba(X)
         return self.classes_[np.argmax(proba, axis=1)]
 
-    def get_diversity_stats(self, X) -> dict:
-        """
-        Оценка разнообразия ансамбля через попарную корреляцию предсказаний.
-
-        Returns
-        -------
-        dict с метриками разнообразия.
-        """
+    def get_diversity_stats(self, X):
+        """Попарная корреляция предсказаний островов — метрики разнообразия."""
         X_arr = np.asarray(X)
-        predictions = np.array([isl.predict(X_arr) for isl in self.islands_])
+        preds = np.array([isl.predict(X_arr) for isl in self.islands_])
         n = len(self.islands_)
 
-        correlations = []
+        corrs = []
         for i in range(n):
             for j in range(i + 1, n):
-                corr = np.corrcoef(predictions[i], predictions[j])[0, 1]
-                if not np.isnan(corr):
-                    correlations.append(corr)
+                c = np.corrcoef(preds[i], preds[j])[0, 1]
+                if not np.isnan(c):
+                    corrs.append(c)
 
         return {
-            "mean_pairwise_correlation": np.mean(correlations) if correlations else 0.0,
-            "std_pairwise_correlation": np.std(correlations) if correlations else 0.0,
-            "min_correlation": np.min(correlations) if correlations else 0.0,
-            "max_correlation": np.max(correlations) if correlations else 0.0,
+            "mean_pairwise_correlation": np.mean(corrs) if corrs else 0.0,
+            "std_pairwise_correlation": np.std(corrs) if corrs else 0.0,
+            "min_correlation": np.min(corrs) if corrs else 0.0,
+            "max_correlation": np.max(corrs) if corrs else 0.0,
             "island_weights": self.weights_.tolist(),
             "island_val_scores": self.island_scores_,
         }

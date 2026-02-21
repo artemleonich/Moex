@@ -1,22 +1,10 @@
-"""
-Генератор синтетических данных, калиброванный под реальное поведение MOEX.
-
-Включает:
-- Реальные ценовые уровни и волатильности для каждого тикера
-- Структурные разрывы: COVID-2020, Февраль-2022
-- GARCH(1,1) кластеризацию волатильности
-- Корреляции между инструментами через общие факторы (нефть, рубль)
-- Реалистичные спреды и объёмы
-- Лот-зависимые цены (шаг цены MOEX)
-"""
+# синтетические данные для тестов (калиброваны под MOEX)
 
 import numpy as np
 import pandas as pd
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Параметры, калиброванные под реальный рынок MOEX 2019-2024
-# ─────────────────────────────────────────────────────────────────────────────
 
 TICKER_PARAMS = {
     "SBER": {
@@ -98,7 +86,7 @@ def _round_to_tick(price: float, tick_size: float) -> float:
 
 
 def _generate_common_factors(n_days: int, rng: np.random.RandomState):
-    """Генерация общих рыночных факторов (рынок, нефть, рубль)."""
+    """Общие рыночные факторы (рынок, нефть, рубль)."""
     # Рыночный фактор
     market = rng.randn(n_days) * 0.012
 
@@ -118,20 +106,7 @@ def generate_ohlcv(
     seed: int = 42,
     common_factors: tuple | None = None,
 ) -> pd.DataFrame:
-    """
-    Генерация дневных OHLCV данных, калиброванных под реальный MOEX.
-
-    Parameters
-    ----------
-    ticker : str
-        Тикер из TICKER_PARAMS.
-    start, end : str
-        Диапазон дат.
-    seed : int
-        Random seed.
-    common_factors : tuple, optional
-        (market, oil, rub) факторы для кросс-корреляции.
-    """
+    """Дневные OHLCV данные, калиброванные под реальный MOEX."""
     params = TICKER_PARAMS.get(ticker, TICKER_PARAMS["SBER"])
     rng = np.random.RandomState(seed + hash(ticker) % 10000)
 
@@ -247,7 +222,7 @@ def generate_usdrub(
     end: str = "2024-12-31",
     seed: int = 100,
 ) -> pd.Series:
-    """Генерация USD/RUB с реалистичными уровнями."""
+    """USD/RUB с реалистичными уровнями."""
     rng = np.random.RandomState(seed)
     dates = pd.bdate_range(start=start, end=end)
     n = len(dates)
@@ -281,7 +256,7 @@ def generate_brent(
     end: str = "2024-12-31",
     seed: int = 200,
 ) -> pd.Series:
-    """Генерация цены Brent с реалистичными уровнями."""
+    """Цена Brent с реалистичными уровнями."""
     rng = np.random.RandomState(seed)
     dates = pd.bdate_range(start=start, end=end)
     n = len(dates)
@@ -312,9 +287,7 @@ def load_synthetic_data(
     start: str = "2019-01-01",
     end: str = "2024-12-31",
 ) -> tuple[dict[str, pd.DataFrame], pd.Series, pd.Series]:
-    """
-    Загрузка полного набора синтетических данных с кросс-корреляциями.
-    """
+    """Полный набор синтетических данных с кросс-корреляциями."""
     rng = np.random.RandomState(42)
     dates = pd.bdate_range(start=start, end=end)
     n = len(dates)

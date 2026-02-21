@@ -1,6 +1,4 @@
-"""
-Загрузка исторических данных MOEX через ISS API (apimoex).
-"""
+# Загрузка исторических данных MOEX через ISS API (apimoex)
 
 import requests
 import apimoex
@@ -9,7 +7,7 @@ import numpy as np
 
 
 class MOEXDataLoader:
-    """Загрузка OHLCV свечей и индексных данных через MOEX ISS API."""
+    """Загружает OHLCV свечи и индексные данные через MOEX ISS API."""
 
     def __init__(self):
         self.session = requests.Session()
@@ -21,24 +19,7 @@ class MOEXDataLoader:
         end: str,
         interval: int = 24,
     ) -> pd.DataFrame:
-        """
-        Загрузка дневных свечей для тикера.
-
-        Parameters
-        ----------
-        ticker : str
-            Тикер MOEX (например, 'SBER', 'GAZP').
-        start : str
-            Дата начала 'YYYY-MM-DD'.
-        end : str
-            Дата конца 'YYYY-MM-DD'.
-        interval : int
-            Интервал свечей (24 = дневной).
-
-        Returns
-        -------
-        pd.DataFrame с колонками open, close, high, low, volume и datetime-индексом.
-        """
+        """Загрузить дневные свечи для одного тикера."""
         data = apimoex.get_board_candles(
             self.session,
             ticker,
@@ -67,7 +48,7 @@ class MOEXDataLoader:
         end: str,
         interval: int = 24,
     ) -> dict[str, pd.DataFrame]:
-        """Загрузка данных для нескольких тикеров."""
+        """Загрузить данные для нескольких тикеров сразу."""
         result = {}
         for ticker in tickers:
             try:
@@ -83,7 +64,7 @@ class MOEXDataLoader:
         start: str = "2015-01-01",
         end: str = "2026-01-01",
     ) -> pd.DataFrame:
-        """Загрузка истории индекса MOEX."""
+        """Загрузить историю индекса MOEX."""
         data = apimoex.get_board_history(
             self.session,
             index,
@@ -101,7 +82,7 @@ class MOEXDataLoader:
         return df
 
     def load_usd_rub(self, start: str, end: str) -> pd.Series:
-        """Загрузка курса USD/RUB (фиксинг MOEX)."""
+        """Загрузить курс USD/RUB (фиксинг MOEX)."""
         data = apimoex.get_board_candles(
             self.session,
             "USD000UTSTOM",
@@ -119,7 +100,7 @@ class MOEXDataLoader:
         return df["close"].rename("usdrub")
 
     def load_brent(self, start: str, end: str) -> pd.Series:
-        """Загрузка фьючерса на Brent (BRJ* на MOEX)."""
+        """Загрузить фьючерс на Brent (BRJ* на MOEX)."""
         data = apimoex.get_board_candles(
             self.session,
             "BR-3.25",
