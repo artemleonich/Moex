@@ -1,20 +1,6 @@
 #!/usr/bin/env python3
-"""
-Бэктест островной модели на реальных тиковых данных RIH6 (фьючерс RTS).
-
-Данные: 10 дней QSH (26 янв — 6 фев 2026), 5-мин свечи.
-Стратегия: внутридневная, long/flat на фьючерсе FORTS.
-
-Издержки FORTS:
-- Биржевой сбор: ~3.2 руб. за контракт RTS (~2.7 бп при цене ~115000)
-- Проскальзывание: ~10 пунктов (1 шаг цены = 10 пунктов)
-- Нет задержки: сигнал на bar[i], вход по open bar[i+1]
-
-Walk-Forward:
-- Train: 6 дней (~1050 свечей), Test: 1 день (~175 свечей)
-- Embargo: 12 баров (1 час)
-- Переобучение: каждый день
-"""
+# Бэктест островной модели на тиковых данных RIH6 (фьючерс RTS, 5-мин свечи).
+# Walk-forward: train 6 дней, test 1 день, embargo 12 баров, ретрейн каждый день.
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -37,15 +23,13 @@ except ImportError:
     HAS_LGBM = False
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Конфигурация
-# ─────────────────────────────────────────────────────────────────────────────
 
 INITIAL_CAPITAL = 100_000       # руб.
 PRICE_STEP = 10                 # шаг цены RTS = 10 пунктов
-POINT_VALUE = 1.0               # 1 пункт RTS ≈ 1 рубль (при текущих курсах ~1 USD)
+POINT_VALUE = 1.0               # 1 пункт RTS ~ 1 рубль (при текущих курсах ~1 USD)
 # Точнее: стоимость шага = 1 USD * курс ЦБ / курс FORTS
-# При USD/RUB ≈ 100 и шаге 10 пунктов: стоимость 1 пункта ≈ 100/100 ≈ 1 руб
+# При USD/RUB ~ 100 и шаге 10 пунктов: стоимость 1 пункта ~ 100/100 ~ 1 руб
 # Но для простоты используем пункт=1 руб (уточняется под конкретный контракт)
 STEP_COST_RUB = 14.68           # стоимость шага цены в рублях (актуальная для RIH6)
 POINT_COST_RUB = STEP_COST_RUB / PRICE_STEP  # стоимость 1 пункта RTS в рублях
@@ -55,8 +39,8 @@ SLIPPAGE_POINTS = 10             # проскальзывание в пункт�
 GO_MARGIN = 25_000               # гарантийное обеспечение за 1 контракт RTS (руб.)
 
 TARGET_HORIZON = 6               # 6 баров = 30 минут (на 5-мин свечах)
-LONG_THRESHOLD = 0.55            # порог для лонга
-SHORT_THRESHOLD = 0.45           # порог для шорта (P(up) < 0.45 → short)
+LONG_THRESHOLD = 0.55
+SHORT_THRESHOLD = 0.45           # P(up) < 0.45 -> short
 
 # Walk-Forward
 TRAIN_BARS = 1050    # ~6 торговых дней по 175 свечей
@@ -64,19 +48,8 @@ EMBARGO_BARS = 12    # 1 час
 RETRAIN_EVERY = 175  # каждый день
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Feature Engineering для интрадея
-# ─────────────────────────────────────────────────────────────────────────────
-
-def generate_intraday_features(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Признаки для 5-мин свечей фьючерса.
-
-    Адаптированные под внутридневную торговлю:
-    - Короткие окна (6, 12, 24, 48, 96 баров = 30мин, 1ч, 2ч, 4ч, 8ч)
-    - Volume profile (buy/sell imbalance)
-    - Open Interest
-    """
+def generate_intraday_features(df):
+    """Признаки для 5-мин свечей фьючерса."""
     f = pd.DataFrame(index=df.index)
 
     close = df["close"]
@@ -86,14 +59,14 @@ def generate_intraday_features(df: pd.DataFrame) -> pd.DataFrame:
 
     windows = [6, 12, 24, 48, 96]
 
-    # --- Returns & Volatility ---
+    # Returns & Volatility
     for w in windows:
         f[f"ret_{w}"] = close.pct_change(w)
         f[f"vol_{w}"] = close.pct_change().rolling(w).std()
         f[f"volume_ratio_{w}"] = volume / volume.rolling(w).mean().replace(0, np.nan)
         f[f"range_{w}"] = ((high - low) / close).rolling(w).mean()
 
-    # --- RSI ---
+    # RSI
     delta = close.diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
@@ -102,14 +75,14 @@ def generate_intraday_features(df: pd.DataFrame) -> pd.DataFrame:
     rs = avg_gain / avg_loss.replace(0, np.nan)
     f["rsi_14"] = 100 - 100 / (1 + rs)
 
-    # --- MACD ---
+    # MACD
     ema12 = _ema(close, 12)
     ema26 = _ema(close, 26)
     macd_line = ema12 - ema26
     signal_line = _ema(macd_line, 9)
     f["macd_hist"] = macd_line - signal_line
 
-    # --- Bollinger Bands ---
+    # Bollinger Bands
     sma20 = _sma(close, 20)
     std20 = close.rolling(20).std()
     upper = sma20 + 2 * std20
@@ -117,13 +90,13 @@ def generate_intraday_features(df: pd.DataFrame) -> pd.DataFrame:
     f["bb_pctb"] = (close - lower) / (upper - lower)
     f["bb_width"] = (upper - lower) / sma20
 
-    # --- Stochastic ---
+    # Stochastic
     for w in [14, 28]:
         lowest = low.rolling(w).min()
         highest = high.rolling(w).max()
         f[f"stoch_{w}"] = 100 * (close - lowest) / (highest - lowest).replace(0, np.nan)
 
-    # --- ATR ---
+    # ATR
     prev_close = close.shift(1)
     tr = pd.concat([
         high - low,
@@ -133,7 +106,7 @@ def generate_intraday_features(df: pd.DataFrame) -> pd.DataFrame:
     f["atr_14"] = tr.rolling(14).mean()
     f["atr_pct"] = f["atr_14"] / close
 
-    # --- Volume Profile ---
+    # Volume Profile
     if "buy_volume" in df.columns and "sell_volume" in df.columns:
         buy_vol = df["buy_volume"].fillna(0)
         sell_vol = df["sell_volume"].fillna(0)
@@ -142,7 +115,7 @@ def generate_intraday_features(df: pd.DataFrame) -> pd.DataFrame:
         for w in [6, 12, 24]:
             f[f"imbalance_ma_{w}"] = f["buy_sell_imbalance"].rolling(w).mean()
 
-    # --- Open Interest ---
+    # Open Interest
     if "oi" in df.columns:
         oi = df["oi"]
         f["oi_change"] = oi.diff()
@@ -150,7 +123,7 @@ def generate_intraday_features(df: pd.DataFrame) -> pd.DataFrame:
         for w in [6, 12]:
             f[f"oi_change_ma_{w}"] = f["oi_change"].rolling(w).mean()
 
-    # --- Session features ---
+    # Session features
     if hasattr(df.index, "hour"):
         hour = df.index.hour
     else:
@@ -164,32 +137,14 @@ def generate_intraday_features(df: pd.DataFrame) -> pd.DataFrame:
     return f.dropna()
 
 
-def generate_target(df: pd.DataFrame, horizon: int = 6) -> pd.Series:
+def generate_target(df, horizon=6):
     """Таргет: forward return за horizon баров > 0."""
     fwd = df["close"].pct_change(horizon).shift(-horizon)
     return (fwd > 0).astype(int).rename(f"target_{horizon}b")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Backtest Engine для фьючерса
-# ─────────────────────────────────────────────────────────────────────────────
-
-def run_futures_backtest(
-    model,
-    model_name: str,
-    X: pd.DataFrame,
-    y: pd.Series,
-    ohlcv: pd.DataFrame,
-) -> dict:
-    """
-    Walk-Forward бэктест на 5-мин свечах фьючерса.
-
-    Логика:
-    - Сигнал на баре i по признакам бара i
-    - Вход по open бара i+1
-    - Позиция: +1 (LONG), 0 (FLAT), -1 (SHORT)
-    - При портфеле 100К и ГО 25К — max 4 контракта, но торгуем 1
-    """
+def run_futures_backtest(model, model_name, X, y, ohlcv):
+    """Walk-forward бэктест, сигнал на bar[i] -> вход по open bar[i+1]."""
     common_idx = X.index.intersection(y.dropna().index).intersection(ohlcv.index)
     X = X.loc[common_idx]
     y = y.loc[common_idx]
@@ -211,7 +166,7 @@ def run_futures_backtest(
     start_idx = TRAIN_BARS + EMBARGO_BARS + 1
 
     for i in range(start_idx, n - 1):
-        # --- Retrain ---
+        # Retrain
         if i - last_train_bar >= RETRAIN_EVERY or current_model is None:
             train_end = i - EMBARGO_BARS
             train_start = max(0, train_end - TRAIN_BARS)
@@ -232,7 +187,7 @@ def run_futures_backtest(
         if current_model is None:
             continue
 
-        # --- Signal ---
+        # Signal
         features = X.iloc[[i]].values
         try:
             proba = current_model.predict_proba(features)[0]
@@ -240,7 +195,7 @@ def run_futures_backtest(
         except Exception:
             p_up = 0.5
 
-        # --- Execution at next bar's open ---
+        # Execution at next bar's open
         next_open = ohlcv.iloc[i + 1]["open"]
         current_close = ohlcv.iloc[i]["close"]
 
@@ -295,7 +250,7 @@ def run_futures_backtest(
                     "fee": fee,
                 })
 
-        # --- Mark-to-market ---
+        # Mark-to-market
         unrealized = 0
         if position == 1:
             unrealized = (current_close - entry_price) * POINT_COST_RUB
@@ -330,7 +285,7 @@ def run_futures_backtest(
             "fee": EXCHANGE_FEE_PER_CONTRACT,
         })
 
-    # --- Metrics ---
+    # Metrics
     eq = pd.DataFrame(equity_curve)
     if eq.empty:
         return {"error": "No equity data"}
@@ -391,8 +346,8 @@ def run_futures_backtest(
     }
 
 
-def run_buy_and_hold_futures(ohlcv: pd.DataFrame, start_idx: int) -> dict:
-    """Buy & Hold бенчмарк: покупаем 1 контракт и держим."""
+def run_buy_and_hold_futures(ohlcv, start_idx):
+    """Buy & Hold бенчмарк: 1 контракт."""
     if start_idx >= len(ohlcv) - 1:
         return {"error": "Insufficient data"}
 
@@ -444,48 +399,31 @@ def run_buy_and_hold_futures(ohlcv: pd.DataFrame, start_idx: int) -> dict:
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Main
-# ─────────────────────────────────────────────────────────────────────────────
-
 def main():
-    print("=" * 70)
-    print("БЭКТЕСТ ОСТРОВНОЙ МОДЕЛИ НА РЕАЛЬНЫХ ДАННЫХ RIH6")
-    print("Фьючерс RTS, 5-мин свечи, 10 торговых дней")
-    print(f"Портфель: {INITIAL_CAPITAL:,} руб.")
-    print(f"ГО за контракт: {GO_MARGIN:,} руб.")
-    print(f"Биржевой сбор: {EXCHANGE_FEE_PER_CONTRACT} руб./контракт")
-    print(f"Проскальзывание: {SLIPPAGE_POINTS} пунктов")
-    print(f"Стоимость шага ({PRICE_STEP} пунктов): {STEP_COST_RUB} руб.")
-    print(f"Target horizon: {TARGET_HORIZON} баров (30 мин)")
-    print("=" * 70)
+    print("RIH6 backtest (5-min bars, 10 days)")
+    print(f"capital={INITIAL_CAPITAL}, GO={GO_MARGIN}, fee={EXCHANGE_FEE_PER_CONTRACT}, "
+          f"slip={SLIPPAGE_POINTS}pts, step_cost={STEP_COST_RUB}rub/{PRICE_STEP}pts, "
+          f"horizon={TARGET_HORIZON}bars")
 
-    # 1. Load data
-    print("\n[1/5] ЗАГРУЗКА ДАННЫХ")
-    print("-" * 60)
+    # Load data
+    print("\nloading data...")
     ohlcv = pd.read_csv("/home/user/Moex/data/RIH6_5min.csv", index_col=0, parse_dates=True)
-    print(f"  5-мин свечей: {len(ohlcv)}")
-    print(f"  Период: {ohlcv.index[0]} — {ohlcv.index[-1]}")
-    print(f"  Цена: {ohlcv['low'].min():,.0f} — {ohlcv['high'].max():,.0f}")
-    print(f"  Объём: {ohlcv['volume'].sum():,.0f} контрактов")
+    print(f"  bars={len(ohlcv)}, {ohlcv.index[0]} -> {ohlcv.index[-1]}")
+    print(f"  price range: {ohlcv['low'].min():,.0f} - {ohlcv['high'].max():,.0f}, "
+          f"total vol: {ohlcv['volume'].sum():,.0f}")
 
-    # 2. Features
-    print("\n[2/5] ГЕНЕРАЦИЯ ПРИЗНАКОВ")
-    print("-" * 60)
+    # Features
+    print("\ngenerating features...")
     X = generate_intraday_features(ohlcv)
     y = generate_target(ohlcv, TARGET_HORIZON)
     common_idx = X.index.intersection(y.dropna().index)
     X = X.loc[common_idx]
     y = y.loc[common_idx]
-    print(f"  Признаков: {X.shape[1]}")
-    print(f"  Наблюдений: {len(X)}")
-    print(f"  Balance: {y.mean():.1%} positive")
-    print(f"  Train window: {TRAIN_BARS} баров (~{TRAIN_BARS/175:.0f} дней)")
-    print(f"  Embargo: {EMBARGO_BARS} баров")
+    print(f"  {X.shape[1]} features, {len(X)} obs, balance={y.mean():.1%} positive")
+    print(f"  train_window={TRAIN_BARS} (~{TRAIN_BARS/175:.0f}d), embargo={EMBARGO_BARS}")
 
-    # 3. Models
-    print("\n[3/5] МОДЕЛИ")
-    print("-" * 60)
+    # Models
+    print("\nsetting up models...")
 
     models = {}
 
@@ -523,36 +461,32 @@ def main():
             verbose=-1,
         )
 
-    print(f"  Модели: {', '.join(models.keys())} + Buy&Hold")
+    print(f"  models: {', '.join(models.keys())} + Buy&Hold")
 
-    # 4. Backtest
-    print("\n[4/5] БЭКТЕСТ")
-    print("=" * 60)
+    # Backtest
+    print("\nrunning backtests...")
 
     results = {}
     for name, model in models.items():
-        print(f"\n  {name}...", end=" ", flush=True)
+        print(f"  {name}...", end=" ", flush=True)
         res = run_futures_backtest(model, name, X, y, ohlcv)
         results[name] = res
         if "error" not in res:
-            print(f"OK — equity {res['final_equity']:,.0f} руб. "
-                  f"({res['total_return_pct']:+.2f}%), "
+            print(f"equity={res['final_equity']:,.0f} ({res['total_return_pct']:+.2f}%), "
                   f"trades={res['n_trades']}, WR={res['win_rate_pct']:.1f}%")
         else:
             print(f"ERROR: {res['error']}")
 
     # Buy & Hold
-    print(f"\n  Buy & Hold...", end=" ", flush=True)
+    print(f"  Buy & Hold...", end=" ", flush=True)
     start_idx = TRAIN_BARS + EMBARGO_BARS + 1
     bnh = run_buy_and_hold_futures(ohlcv, start_idx)
     results["Buy & Hold"] = bnh
     if "error" not in bnh:
-        print(f"OK — equity {bnh['final_equity']:,.0f} руб. "
-              f"({bnh['total_return_pct']:+.2f}%)")
+        print(f"equity={bnh['final_equity']:,.0f} ({bnh['total_return_pct']:+.2f}%)")
 
-    # 5. Results
-    print(f"\n\n[5/5] ИТОГОВЫЕ РЕЗУЛЬТАТЫ")
-    print("=" * 70)
+    # Results summary
+    print("\n--- results ---")
 
     rows = []
     for name, res in results.items():
@@ -579,16 +513,14 @@ def main():
         trades = results["IslandForest"]["trades"]
         sell_trades = [t for t in trades if "pnl_rub" in t]
         if sell_trades:
-            print(f"\n{'─' * 70}")
-            print("СДЕЛКИ IslandForest (первые 20):")
+            print(f"\nIslandForest trades (first 20):")
             for t in sell_trades[:20]:
                 print(f"  {t['time']} {t['side']:10s} @ {t['price']:>10,.0f}  "
                       f"P&L: {t['pnl_points']:>+8.0f} пт = {t['pnl_rub']:>+8.0f} руб. "
-                      f"(комиссия {t['fee']:.1f})")
+                      f"(fee {t['fee']:.1f})")
 
     # Equity curve plot
-    print(f"\n{'─' * 70}")
-    print("ВИЗУАЛИЗАЦИЯ")
+    print("\nplotting...")
 
     fig, axes = plt.subplots(3, 1, figsize=(14, 12),
                               gridspec_kw={"height_ratios": [3, 1, 1]})
@@ -631,11 +563,9 @@ def main():
     plt.tight_layout()
     plt.savefig("/home/user/Moex/equity_rih6.png", dpi=150, bbox_inches="tight")
     plt.close()
-    print(f"  Saved: equity_rih6.png")
+    print("saved equity_rih6.png")
 
-    print(f"\n{'━' * 70}")
-    print("БЭКТЕСТ ЗАВЕРШЁН")
-    print(f"{'━' * 70}")
+    print("\ndone.")
 
 
 if __name__ == "__main__":

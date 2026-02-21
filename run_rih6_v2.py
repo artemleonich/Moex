@@ -1,19 +1,5 @@
 #!/usr/bin/env python3
-"""
-Бэктест на реальных данных RIH6 — сравнение подходов.
-
-Проблема: 10 дней данных мало для ML walk-forward (нужно 30+).
-Решение: добавляем rule-based стратегии, которые НЕ требуют обучения,
-и оптимизируем ML через уменьшенный train window.
-
-Стратегии:
-1. IslandForest (ML) — walk-forward с коротким train
-2. LightGBM (ML) — walk-forward
-3. MeanReversion — RSI oversold/overbought + Bollinger Bands
-4. Momentum — пробой ATR + volume confirmation
-5. Combined — ансамбль ML + rules
-6. Buy & Hold
-"""
+# Бэктест RIH6: ML + rule-based стратегии на 5-мин свечах
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -36,9 +22,7 @@ except ImportError:
     HAS_LGBM = False
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Конфигурация
-# ─────────────────────────────────────────────────────────────────────────────
 
 INITIAL_CAPITAL = 100_000
 PRICE_STEP = 10
@@ -49,12 +33,9 @@ SLIPPAGE_PTS = 10
 GO_MARGIN = 25_000
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Feature Generation
-# ─────────────────────────────────────────────────────────────────────────────
 
-def build_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Признаки для 5-мин свечей."""
+def build_features(df):
     f = pd.DataFrame(index=df.index)
     close = df["close"]
     high = df["high"]
@@ -126,25 +107,14 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     return f.dropna()
 
 
-def build_target(df: pd.DataFrame, horizon: int = 6) -> pd.Series:
+def build_target(df, horizon=6):
     fwd = df["close"].pct_change(horizon).shift(-horizon)
     return (fwd > 0).astype(int).rename(f"target_{horizon}b")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Backtest Engine
-# ─────────────────────────────────────────────────────────────────────────────
 
-def backtest(
-    signals: pd.Series,
-    ohlcv: pd.DataFrame,
-    name: str,
-) -> dict:
-    """
-    Универсальный бэктестер.
-
-    signals: pd.Series с индексом как у ohlcv, значения = target_position (-1, 0, +1)
-    """
+def backtest(signals, ohlcv, name):
     cash = INITIAL_CAPITAL
     position = 0
     entry_price = 0.0
@@ -252,17 +222,10 @@ def backtest(
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Strategy: Mean Reversion
-# ─────────────────────────────────────────────────────────────────────────────
 
-def strategy_mean_reversion(features: pd.DataFrame, ohlcv: pd.DataFrame) -> pd.Series:
-    """
-    Mean Reversion: покупаем oversold, шортим overbought.
-    RSI < 30 + BB < 0.1 → LONG
-    RSI > 70 + BB > 0.9 → SHORT
-    Выход при RSI в нейтральной зоне (40-60).
-    """
+def strategy_mean_reversion(features, ohlcv):
+    # RSI < 30 + BB < 0.1 -> LONG, RSI > 70 + BB > 0.9 -> SHORT
     signals = pd.Series(0, index=features.index)
     position = 0
 
@@ -287,16 +250,10 @@ def strategy_mean_reversion(features: pd.DataFrame, ohlcv: pd.DataFrame) -> pd.S
     return signals
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Strategy: Momentum / Trend Following
-# ─────────────────────────────────────────────────────────────────────────────
 
-def strategy_momentum(features: pd.DataFrame, ohlcv: pd.DataFrame) -> pd.Series:
-    """
-    Momentum: следуем за трендом.
-    MACD > 0 + ret_24 > 0 + volume rising → LONG
-    MACD < 0 + ret_24 < 0 + volume rising → SHORT
-    """
+def strategy_momentum(features, ohlcv):
+    # MACD > 0 + ret_24 > 0 + volume rising -> LONG, opposite -> SHORT
     signals = pd.Series(0, index=features.index)
     position = 0
     bars_in_position = 0
@@ -328,16 +285,10 @@ def strategy_momentum(features: pd.DataFrame, ohlcv: pd.DataFrame) -> pd.Series:
     return signals
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Strategy: Volume Imbalance
-# ─────────────────────────────────────────────────────────────────────────────
 
-def strategy_volume_imbalance(features: pd.DataFrame, ohlcv: pd.DataFrame) -> pd.Series:
-    """
-    Volume Imbalance: следуем за крупными покупателями/продавцами.
-    Сильный buy imbalance + OI растёт → LONG
-    Сильный sell imbalance + OI растёт → SHORT
-    """
+def strategy_volume_imbalance(features, ohlcv):
+    # Follow large buyers/sellers, only during main session
     signals = pd.Series(0, index=features.index)
     position = 0
     bars_in = 0
@@ -349,7 +300,6 @@ def strategy_volume_imbalance(features: pd.DataFrame, ohlcv: pd.DataFrame) -> pd
         main_session = row.get("main_session", 0)
 
         if not main_session:
-            # Только основная сессия
             if position != 0:
                 position = 0
             signals.iloc[i] = 0
@@ -364,7 +314,6 @@ def strategy_volume_imbalance(features: pd.DataFrame, ohlcv: pd.DataFrame) -> pd
                 bars_in = 0
         else:
             bars_in += 1
-            # Реверс или тайм-стоп
             if position == 1 and (imb < -0.1 or bars_in > 18):
                 position = 0
             elif position == -1 and (imb > 0.1 or bars_in > 18):
@@ -375,22 +324,10 @@ def strategy_volume_imbalance(features: pd.DataFrame, ohlcv: pd.DataFrame) -> pd
     return signals
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ML Strategy with shorter train
-# ─────────────────────────────────────────────────────────────────────────────
+# ML Strategy with shorter train window
 
-def strategy_ml(
-    model,
-    X: pd.DataFrame,
-    y: pd.Series,
-    ohlcv: pd.DataFrame,
-    train_bars: int = 500,
-    embargo: int = 12,
-    retrain_every: int = 100,
-    long_thr: float = 0.55,
-    short_thr: float = 0.45,
-) -> pd.Series:
-    """ML walk-forward с настраиваемыми параметрами."""
+def strategy_ml(model, X, y, ohlcv, train_bars=500, embargo=12,
+                retrain_every=100, long_thr=0.55, short_thr=0.45):
     common_idx = X.index.intersection(y.dropna().index)
     X = X.loc[common_idx]
     y = y.loc[common_idx]
@@ -434,20 +371,10 @@ def strategy_ml(
     return signals
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Combined Ensemble Strategy
-# ─────────────────────────────────────────────────────────────────────────────
+# Combined Ensemble
 
-def strategy_combined(
-    ml_signals: pd.Series,
-    mr_signals: pd.Series,
-    mom_signals: pd.Series,
-    vi_signals: pd.Series,
-) -> pd.Series:
-    """
-    Ансамбль: голосование ML + rule-based стратегий.
-    Позиция = sign(сумма сигналов), но только если >= 2 из 4 согласны.
-    """
+def strategy_combined(ml_signals, mr_signals, mom_signals, vi_signals):
+    # Majority vote: position = sign(sum), but only if >= 2 agree
     common = ml_signals.index.intersection(mr_signals.index) \
         .intersection(mom_signals.index).intersection(vi_signals.index)
 
@@ -464,44 +391,39 @@ def strategy_combined(
     return signals
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Main
-# ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    print("=" * 70)
-    print("БЭКТЕСТ RIH6 — ML + RULE-BASED СТРАТЕГИИ")
-    print("Фьючерс RTS, 5-мин свечи, 10 дней реальных тиков")
-    print(f"Портфель: {INITIAL_CAPITAL:,} руб. | ГО: {GO_MARGIN:,} руб.")
-    print(f"Сбор: {EXCHANGE_FEE} руб. | Слипедж: {SLIPPAGE_PTS} пунктов")
-    print("=" * 70)
+    print("БЭКТЕСТ RIH6 - ML + rule-based стратегии")
+    print(f"Портфель: {INITIAL_CAPITAL:,} руб, ГО: {GO_MARGIN:,} руб, "
+          f"сбор: {EXCHANGE_FEE} руб, слипедж: {SLIPPAGE_PTS} пт")
 
     # Load
     ohlcv = pd.read_csv("/home/user/Moex/data/RIH6_5min.csv", index_col=0, parse_dates=True)
-    print(f"\nДанные: {len(ohlcv)} свечей, {ohlcv.index[0].date()} — {ohlcv.index[-1].date()}")
-    print(f"Цена: {ohlcv['low'].min():,.0f} — {ohlcv['high'].max():,.0f}")
+    print(f"Данные: {len(ohlcv)} свечей, {ohlcv.index[0].date()} - {ohlcv.index[-1].date()}")
+    print(f"Цена: {ohlcv['low'].min():,.0f} - {ohlcv['high'].max():,.0f}")
 
     # Features
     features = build_features(ohlcv)
     target = build_target(ohlcv, horizon=6)
     print(f"Признаков: {features.shape[1]}, наблюдений: {len(features)}")
 
-    # ── Rule-based signals ──
-    print("\n[RULE-BASED СТРАТЕГИИ]")
+    # Rule-based signals
+    print("\nRule-based стратегии:")
 
     sig_mr = strategy_mean_reversion(features, ohlcv)
     sig_mom = strategy_momentum(features, ohlcv)
     sig_vi = strategy_volume_imbalance(features, ohlcv)
 
-    print(f"  MeanReversion:    {(sig_mr != 0).sum()} баров в позиции "
+    print(f"  MeanReversion:   {(sig_mr != 0).sum()} баров в позиции "
           f"(L:{(sig_mr == 1).sum()}, S:{(sig_mr == -1).sum()})")
-    print(f"  Momentum:         {(sig_mom != 0).sum()} баров в позиции "
+    print(f"  Momentum:        {(sig_mom != 0).sum()} баров в позиции "
           f"(L:{(sig_mom == 1).sum()}, S:{(sig_mom == -1).sum()})")
-    print(f"  VolumeImbalance:  {(sig_vi != 0).sum()} баров в позиции "
+    print(f"  VolumeImbalance: {(sig_vi != 0).sum()} баров в позиции "
           f"(L:{(sig_vi == 1).sum()}, S:{(sig_vi == -1).sum()})")
 
-    # ── ML signals (shorter train window) ──
-    print("\n[ML СТРАТЕГИИ]")
+    # ML signals
+    print("\nML стратегии:")
 
     island_model = IslandForestModel(
         n_islands=6, trees_per_island=50, n_migrations=3,
@@ -510,7 +432,7 @@ def main():
     sig_island = strategy_ml(island_model, features, target, ohlcv,
                               train_bars=500, embargo=12, retrain_every=100,
                               long_thr=0.54, short_thr=0.46)
-    print(f"  IslandForest:     {(sig_island != 0).sum()} баров в позиции")
+    print(f"  IslandForest:    {(sig_island != 0).sum()} баров в позиции")
 
     lgbm_model = None
     sig_lgbm = pd.Series(0, index=features.index)
@@ -524,15 +446,14 @@ def main():
         sig_lgbm = strategy_ml(lgbm_model, features, target, ohlcv,
                                 train_bars=500, embargo=12, retrain_every=100,
                                 long_thr=0.54, short_thr=0.46)
-        print(f"  LightGBM:         {(sig_lgbm != 0).sum()} баров в позиции")
+        print(f"  LightGBM:        {(sig_lgbm != 0).sum()} баров в позиции")
 
-    # ── Combined ──
+    # Combined
     sig_combined = strategy_combined(sig_island, sig_mr, sig_mom, sig_vi)
-    print(f"  Combined (vote):  {(sig_combined != 0).sum()} баров в позиции")
+    print(f"  Combined (vote): {(sig_combined != 0).sum()} баров в позиции")
 
-    # ── Backtest all ──
-    print("\n[БЭКТЕСТ]")
-    print("=" * 70)
+    # Backtest all
+    print("\nБэктест:")
 
     strategies = {
         "MeanReversion": sig_mr,
@@ -561,10 +482,8 @@ def main():
                   f"WR={res['win_rate']:.0f}% "
                   f"PF={res['pf']:.2f}")
 
-    # ── Summary table ──
-    print(f"\n{'═' * 70}")
-    print("ИТОГОВАЯ ТАБЛИЦА")
-    print(f"{'═' * 70}")
+    # Summary table
+    print("\nИтоговая таблица:")
 
     rows = []
     for sname, res in results.items():
@@ -584,18 +503,17 @@ def main():
     df = pd.DataFrame(rows).set_index("Стратегия")
     print(f"\n{df.to_string()}")
 
-    # ── Best trades ──
+    # Best trades
     for sname in ["MeanReversion", "Momentum", "Combined"]:
         if sname in results and "error" not in results[sname]:
             ct = results[sname]["trades"]
             if ct:
-                print(f"\n{'─' * 50}")
-                print(f"Сделки {sname}:")
+                print(f"\nСделки {sname}:")
                 for t in ct[:15]:
                     print(f"  {t['time']} {t['side']:12s} @ {t['price']:>10,.0f}  "
                           f"P&L: {t['pnl_pts']:>+6.0f} пт = {t['pnl_rub']:>+7.0f} руб.")
 
-    # ── Plot ──
+    # Plot
     fig, axes = plt.subplots(3, 1, figsize=(16, 13),
                               gridspec_kw={"height_ratios": [3, 1, 1]})
 
@@ -636,10 +554,7 @@ def main():
     plt.savefig("/home/user/Moex/equity_rih6_v2.png", dpi=150, bbox_inches="tight")
     plt.close()
     print(f"\nSaved: equity_rih6_v2.png")
-
-    print(f"\n{'━' * 70}")
-    print("БЭКТЕСТ ЗАВЕРШЁН")
-    print(f"{'━' * 70}")
+    print("Готово.")
 
 
 if __name__ == "__main__":

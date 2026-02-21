@@ -1,17 +1,5 @@
 #!/usr/bin/env python3
-"""
-Бэктест островной модели случайных деревьев на исторических данных MOEX.
-
-Тестирует:
-1. IslandForestModel (6 островов, кольцевая миграция)
-2. Стандартный RandomForest (бенчмарк)
-3. LightGBM (бенчмарк)
-4. Buy & Hold (бенчмарк)
-
-Walk-Forward валидация: 252 дня обучение → 63 дня тест → сдвиг.
-Тикеры: SBER, GAZP, LKOH, GMKN, ROSN.
-Период: 2018-01-01 — 2025-12-31.
-"""
+# Бэктест островной модели на MOEX. Walk-forward, несколько бенчмарков.
 
 import sys
 import warnings
@@ -34,20 +22,14 @@ from island_model.features import FeatureGenerator, TargetGenerator
 from island_model.island_forest import IslandForestModel
 from island_model.synthetic_data import load_synthetic_data
 
-# Попробовать импортировать LightGBM
 try:
     from lightgbm import LGBMClassifier
-
     HAS_LGBM = True
 except ImportError:
     HAS_LGBM = False
     print("WARNING: LightGBM не установлен, пропускаем бенчмарк LGBM")
 
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Конфигурация
-# ─────────────────────────────────────────────────────────────────────────────
-
 TICKERS = ["SBER", "GAZP", "LKOH", "GMKN", "ROSN"]
 START_DATE = "2018-01-01"
 END_DATE = "2025-12-31"
@@ -66,11 +48,9 @@ MIGRATION_RATE = 0.1
 
 
 def load_data():
-    """Загрузка данных с MOEX ISS API, fallback на синтетические данные."""
-    print("\n[1/5] ЗАГРУЗКА ДАННЫХ")
-    print("-" * 50)
+    """Загрузка данных с MOEX или синтетика как fallback."""
+    print("\nЗагрузка данных...")
 
-    # Пробуем реальный API
     loader = MOEXDataLoader()
     print(f"Попытка загрузки с MOEX ISS API: {TICKERS}")
     ticker_data = loader.load_multiple(TICKERS, START_DATE, END_DATE)
@@ -79,7 +59,6 @@ def load_data():
     brent = None
 
     if ticker_data:
-        # API доступен — загружаем межрыночные данные
         print("Загрузка USD/RUB...")
         try:
             usdrub = loader.load_usd_rub(START_DATE, END_DATE)
@@ -94,7 +73,6 @@ def load_data():
         except Exception as e:
             print(f"  Brent: SKIP ({e})")
     else:
-        # API недоступен — используем синтетические данные
         print("\n  MOEX ISS API недоступен. Переключение на синтетические данные.")
         print("  Синтетические данные имитируют реалистичное поведение акций MOEX")
         print("  (режимные переключения, GARCH-волатильность, корреляции).\n")
@@ -104,9 +82,8 @@ def load_data():
 
 
 def prepare_features(ticker_data, usdrub, brent):
-    """Генерация признаков и целевой переменной для каждого тикера."""
-    print("\n[2/5] ГЕНЕРАЦИЯ ПРИЗНАКОВ")
-    print("-" * 50)
+    """Генерация признаков и таргета для каждого тикера."""
+    print("\nГенерация признаков...")
 
     feat_gen = FeatureGenerator(windows=[5, 10, 20, 60])
     tgt_gen = TargetGenerator(horizon=TARGET_HORIZON)
@@ -117,11 +94,9 @@ def prepare_features(ticker_data, usdrub, brent):
         print(f"\n  {ticker}:")
         print(f"    Сырых данных: {len(df)} строк ({df.index[0]} — {df.index[-1]})")
 
-        # Признаки
         features = feat_gen.generate(df, usdrub=usdrub, brent=brent)
         print(f"    Признаков: {features.shape[1]}")
 
-        # Целевая переменная
         target = tgt_gen.generate(df)
 
         # Дневные доходности для расчёта метрик стратегии
@@ -149,7 +124,7 @@ def prepare_features(ticker_data, usdrub, brent):
 
 
 def create_models():
-    """Создание моделей для сравнения."""
+    """Собираем модели для сравнения."""
     models = {
         "IslandForest": IslandForestModel(
             n_islands=N_ISLANDS,
@@ -188,9 +163,8 @@ def create_models():
 
 
 def run_backtest_for_ticker(ticker, X, y, returns, models):
-    """Запуск Walk-Forward бэктеста для одного тикера."""
+    """Walk-Forward бэктест одного тикера."""
     print(f"\n  Бэктест {ticker}")
-    print(f"  {'─' * 40}")
 
     backtester = WalkForwardBacktester(
         train_days=TRAIN_DAYS,
@@ -225,9 +199,8 @@ def run_backtest_for_ticker(ticker, X, y, returns, models):
 
 
 def analyze_diversity(ticker, X, y):
-    """Анализ разнообразия островной модели vs стандартного RF."""
+    """Сравнение корреляций IslandForest vs RF."""
     print(f"\n  Анализ разнообразия ({ticker})")
-    print(f"  {'─' * 40}")
 
     # Обучаем на всех данных для анализа
     split = int(len(X) * 0.7)
@@ -287,15 +260,13 @@ def analyze_diversity(ticker, X, y):
 
 
 def main():
-    print("=" * 80)
-    print("БЭКТЕСТ ОСТРОВНОЙ МОДЕЛИ СЛУЧАЙНЫХ ДЕРЕВЬЕВ НА MOEX")
+    print(f"Бэктест островной модели на MOEX")
     print(f"Период: {START_DATE} — {END_DATE}")
     print(f"Тикеры: {', '.join(TICKERS)}")
     print(f"Target: forward return {TARGET_HORIZON}d > 0")
     print(f"Walk-Forward: train={TRAIN_DAYS}d, test={TEST_DAYS}d, embargo={EMBARGO_DAYS}d")
-    print(f"IslandForest: {N_ISLANDS} островов × {TREES_PER_ISLAND} деревьев, "
+    print(f"IslandForest: {N_ISLANDS} островов x {TREES_PER_ISLAND} деревьев, "
           f"{N_MIGRATIONS} миграций")
-    print("=" * 80)
 
     # Загрузка данных
     ticker_data, usdrub, brent = load_data()
@@ -313,11 +284,10 @@ def main():
 
     # Создание моделей
     models = create_models()
-    print(f"\n[3/5] МОДЕЛИ ДЛЯ СРАВНЕНИЯ: {', '.join(models.keys())} + Buy&Hold")
+    print(f"\nМодели для сравнения: {', '.join(models.keys())} + Buy&Hold")
 
     # Walk-Forward бэктест
-    print(f"\n[4/5] WALK-FORWARD БЭКТЕСТ")
-    print("=" * 50)
+    print(f"\nWalk-Forward бэктест")
 
     all_results = {}
     all_diversity = {}
@@ -326,24 +296,18 @@ def main():
         results = run_backtest_for_ticker(ticker, X, y, ret, models)
         all_results[ticker] = results
 
-        # Анализ разнообразия
         diversity = analyze_diversity(ticker, X, y)
         all_diversity[ticker] = diversity
 
     # Итоговое сравнение
-    print(f"\n[5/5] ИТОГОВЫЕ РЕЗУЛЬТАТЫ")
-    print("=" * 80)
+    print(f"\nИтоговые результаты")
 
     for ticker, results in all_results.items():
-        print(f"\n{'━' * 80}")
-        print(f"ТИКЕР: {ticker}")
-        print(f"{'━' * 80}")
+        print(f"\nТИКЕР: {ticker}")
         comparison_df = print_comparison(results)
 
     # Агрегированные результаты по всем тикерам
-    print(f"\n{'━' * 80}")
-    print("АГРЕГИРОВАННЫЕ РЕЗУЛЬТАТЫ ПО ВСЕМ ТИКЕРАМ")
-    print(f"{'━' * 80}")
+    print(f"\nАгрегированные результаты по всем тикерам")
 
     model_names = list(models.keys()) + ["Buy & Hold"]
     agg = {name: [] for name in model_names}
@@ -370,17 +334,13 @@ def main():
     print(agg_df.to_string())
 
     # Сводка разнообразия
-    print(f"\n{'━' * 80}")
-    print("АНАЛИЗ РАЗНООБРАЗИЯ (ρ — попарная корреляция)")
-    print(f"{'━' * 80}")
+    print(f"\nАнализ разнообразия (rho — попарная корреляция)")
     for ticker, div in all_diversity.items():
-        print(f"  {ticker}: IslandForest ρ={div['island_mean_corr']:.4f}, "
-              f"RandomForest ρ={div['rf_mean_corr']:.4f}, "
-              f"Δρ={div['rf_mean_corr'] - div['island_mean_corr']:+.4f}")
+        print(f"  {ticker}: IslandForest rho={div['island_mean_corr']:.4f}, "
+              f"RandomForest rho={div['rf_mean_corr']:.4f}, "
+              f"delta={div['rf_mean_corr'] - div['island_mean_corr']:+.4f}")
 
-    print(f"\n{'━' * 80}")
-    print("БЭКТЕСТ ЗАВЕРШЁН")
-    print(f"{'━' * 80}")
+    print(f"\nБэктест завершён")
 
 
 if __name__ == "__main__":

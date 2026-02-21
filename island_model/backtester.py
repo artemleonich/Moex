@@ -1,11 +1,4 @@
-"""
-Walk-Forward бэктестер с метриками качества по методологии де Прадо.
-
-- Walk-Forward Validation (скользящее окно)
-- Purged K-Fold (упрощённый вариант)
-- Метрики: Accuracy, Sharpe, Sortino, MaxDD, Calmar, Profit Factor
-- Сравнение с бенчмарками (Buy & Hold, Random Forest, LightGBM)
-"""
+# walk-forward бэктестер
 
 import warnings
 from dataclasses import dataclass, field
@@ -19,7 +12,7 @@ from sklearn.metrics import accuracy_score, f1_score, log_loss, precision_score,
 
 @dataclass
 class FoldResult:
-    """Результат одного фолда Walk-Forward."""
+    """Результат одного фолда."""
     fold_idx: int
     train_start: str
     train_end: str
@@ -45,27 +38,27 @@ class BacktestResult:
     folds: list[FoldResult] = field(default_factory=list)
 
     @property
-    def mean_accuracy(self) -> float:
+    def mean_accuracy(self):
         return np.mean([f.accuracy for f in self.folds])
 
     @property
-    def mean_f1(self) -> float:
+    def mean_f1(self):
         return np.mean([f.f1 for f in self.folds])
 
     @property
-    def mean_precision(self) -> float:
+    def mean_precision(self):
         return np.mean([f.precision for f in self.folds])
 
     @property
-    def mean_recall(self) -> float:
+    def mean_recall(self):
         return np.mean([f.recall for f in self.folds])
 
     @property
-    def mean_log_loss(self) -> float:
+    def mean_log_loss(self):
         return np.mean([f.log_loss_val for f in self.folds])
 
-    def strategy_returns(self) -> np.ndarray:
-        """Последовательные доходности стратегии по всем фолдам."""
+    def strategy_returns(self):
+        """Доходности стратегии по всем фолдам подряд."""
         all_returns = []
         for fold in self.folds:
             # Стратегия: long если модель предсказывает рост, иначе cash (0)
@@ -74,16 +67,16 @@ class BacktestResult:
             all_returns.extend(strat_ret)
         return np.array(all_returns)
 
-    def sharpe_ratio(self, risk_free_daily: float = 0.0) -> float:
-        """Annualized Sharpe Ratio."""
+    def sharpe_ratio(self, risk_free_daily=0.0):
+        """Annualized Sharpe."""
         ret = self.strategy_returns()
         excess = ret - risk_free_daily
         if len(excess) == 0 or np.std(excess) == 0:
             return 0.0
         return np.mean(excess) / np.std(excess) * np.sqrt(252)
 
-    def sortino_ratio(self, risk_free_daily: float = 0.0) -> float:
-        """Annualized Sortino Ratio."""
+    def sortino_ratio(self, risk_free_daily=0.0):
+        """Annualized Sortino."""
         ret = self.strategy_returns()
         excess = ret - risk_free_daily
         downside = excess[excess < 0]
@@ -91,8 +84,7 @@ class BacktestResult:
             return 0.0
         return np.mean(excess) / np.std(downside) * np.sqrt(252)
 
-    def max_drawdown(self) -> float:
-        """Maximum Drawdown от equity curve."""
+    def max_drawdown(self):
         ret = self.strategy_returns()
         if len(ret) == 0:
             return 0.0
@@ -101,7 +93,7 @@ class BacktestResult:
         drawdowns = (equity - running_max) / running_max
         return float(np.min(drawdowns))
 
-    def profit_factor(self) -> float:
+    def profit_factor(self):
         """Profit Factor = сумма прибылей / сумма убытков."""
         ret = self.strategy_returns()
         gains = ret[ret > 0].sum()
@@ -110,8 +102,7 @@ class BacktestResult:
             return float("inf") if gains > 0 else 0.0
         return gains / losses
 
-    def calmar_ratio(self) -> float:
-        """Calmar Ratio = annualized return / |max drawdown|."""
+    def calmar_ratio(self):
         ret = self.strategy_returns()
         if len(ret) == 0:
             return 0.0
@@ -121,8 +112,7 @@ class BacktestResult:
             return 0.0
         return ann_ret / mdd
 
-    def total_return(self) -> float:
-        """Кумулятивная доходность стратегии."""
+    def total_return(self):
         ret = self.strategy_returns()
         if len(ret) == 0:
             return 0.0
@@ -149,57 +139,16 @@ class BacktestResult:
 
 
 class WalkForwardBacktester:
-    """
-    Walk-Forward бэктестер со скользящим окном.
+    """Walk-forward бэктестер со скользящим окном."""
 
-    Parameters
-    ----------
-    train_days : int
-        Размер тренировочного окна (торговых дней).
-    test_days : int
-        Размер тестового окна.
-    embargo_days : int
-        Зазор между train и test для предотвращения leakage.
-    step_days : int
-        Шаг сдвига окна (по умолчанию = test_days).
-    """
-
-    def __init__(
-        self,
-        train_days: int = 252,
-        test_days: int = 63,
-        embargo_days: int = 5,
-        step_days: int | None = None,
-    ):
+    def __init__(self, train_days=252, test_days=63, embargo_days=5, step_days=None):
         self.train_days = train_days
         self.test_days = test_days
         self.embargo_days = embargo_days
         self.step_days = step_days or test_days
 
-    def run(
-        self,
-        model: BaseEstimator,
-        X: pd.DataFrame,
-        y: pd.Series,
-        returns: pd.Series,
-        model_name: str = "Model",
-    ) -> BacktestResult:
-        """
-        Запуск Walk-Forward валидации.
-
-        Parameters
-        ----------
-        model : BaseEstimator
-            sklearn-совместимая модель.
-        X : pd.DataFrame
-            Матрица признаков с datetime-индексом.
-        y : pd.Series
-            Целевая переменная (бинарная).
-        returns : pd.Series
-            Фактические дневные доходности (для расчёта метрик стратегии).
-        model_name : str
-            Название модели для отчёта.
-        """
+    def run(self, model, X, y, returns, model_name="Model") -> BacktestResult:
+        """Запуск walk-forward валидации."""
         result = BacktestResult(model_name=model_name)
 
         X_vals = X.values if hasattr(X, "values") else np.asarray(X)
@@ -272,10 +221,8 @@ class WalkForwardBacktester:
         return result
 
 
-def run_buy_and_hold(returns: pd.Series, test_indices: list[tuple[int, int]]) -> BacktestResult:
-    """
-    Бенчмарк Buy & Hold: всегда long.
-    """
+def run_buy_and_hold(returns, test_indices):
+    """Бенчмарк Buy & Hold — всегда long."""
     result = BacktestResult(model_name="Buy & Hold")
     ret_vals = returns.values if hasattr(returns, "values") else np.asarray(returns)
 
@@ -306,8 +253,8 @@ def run_buy_and_hold(returns: pd.Series, test_indices: list[tuple[int, int]]) ->
     return result
 
 
-def print_comparison(results: list[BacktestResult]):
-    """Печать сравнительной таблицы результатов."""
+def print_comparison(results):
+    """Печать сравнительной таблицы."""
     summaries = [r.summary() for r in results]
     df = pd.DataFrame(summaries).set_index("model")
     print("\n" + "=" * 80)

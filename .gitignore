@@ -2,4 +2,11 @@ __pycache__/
 *.pyc
 *.pyo
 *.qsh
+*.png
 downloaded_data/qsh_files/
+.idea/
+.vscode/
+*.egg-info/
+dist/
+build/
+.env

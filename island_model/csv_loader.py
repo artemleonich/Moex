@@ -1,6 +1,4 @@
-"""
-Загрузка OHLCV данных из локальных CSV-файлов.
-"""
+# загрузка из csv
 
 import os
 
@@ -11,7 +9,6 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 
 
 def load_ticker_csv(ticker: str, data_dir: str | None = None) -> pd.DataFrame:
-    """Загрузка дневных OHLCV из CSV."""
     data_dir = data_dir or DATA_DIR
     path = os.path.join(data_dir, f"{ticker}_daily.csv")
     df = pd.read_csv(path, index_col=0, parse_dates=True)
@@ -39,7 +36,6 @@ def load_all_csv(
     tickers: list[str],
     data_dir: str | None = None,
 ) -> tuple[dict[str, pd.DataFrame], pd.Series | None, pd.Series | None]:
-    """Загрузка всех данных из CSV."""
     data_dir = data_dir or DATA_DIR
     ticker_data = {}
     for t in tickers:

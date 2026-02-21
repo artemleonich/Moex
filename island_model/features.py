@@ -1,17 +1,8 @@
-"""
-Инженерия признаков для MOEX: технические индикаторы, межрыночные,
-календарные и россия-специфичные факторы.
-
-Технические индикаторы реализованы вручную (без библиотеки ta).
-"""
+# фичи для MOEX
 
 import numpy as np
 import pandas as pd
 
-
-# ---------------------------------------------------------------------------
-# Вспомогательные функции для технических индикаторов
-# ---------------------------------------------------------------------------
 
 def _ema(series: pd.Series, span: int) -> pd.Series:
     return series.ewm(span=span, adjust=False).mean()
@@ -126,22 +117,8 @@ def ichimoku(high: pd.Series, low: pd.Series,
     )
 
 
-# ---------------------------------------------------------------------------
-# Основной генератор признаков
-# ---------------------------------------------------------------------------
-
 class FeatureGenerator:
-    """
-    Генерация 30+ признаков из OHLCV данных.
-
-    Категории:
-    - Ценовые доходности и волатильность (разные окна)
-    - Технические индикаторы (RSI, MACD, BB, ATR, OBV, Stoch, Williams,
-      CCI, ADX, Ichimoku)
-    - Объёмные индикаторы
-    - Календарные факторы
-    - Межрыночные (если переданы usdrub, brent)
-    """
+    """Генерация 30+ признаков из OHLCV данных."""
 
     def __init__(self, windows: list[int] | None = None):
         self.windows = windows or [5, 10, 20, 60]
@@ -152,20 +129,7 @@ class FeatureGenerator:
         usdrub: pd.Series | None = None,
         brent: pd.Series | None = None,
     ) -> pd.DataFrame:
-        """
-        Parameters
-        ----------
-        df : pd.DataFrame
-            OHLCV данные с datetime-индексом.
-        usdrub : pd.Series, optional
-            Курс USD/RUB.
-        brent : pd.Series, optional
-            Цена Brent.
-
-        Returns
-        -------
-        pd.DataFrame с признаками (без NaN-строк).
-        """
+        """Строит все фичи из OHLCV + опционально usdrub/brent."""
         f = pd.DataFrame(index=df.index)
 
         close = df["close"]
@@ -173,14 +137,12 @@ class FeatureGenerator:
         low = df["low"]
         volume = df["volume"]
 
-        # --- Ценовые доходности и волатильность ---
         for w in self.windows:
             f[f"ret_{w}"] = close.pct_change(w)
             f[f"vol_{w}"] = close.pct_change().rolling(w).std()
             f[f"volume_ratio_{w}"] = volume / volume.rolling(w).mean().replace(0, np.nan)
             f[f"high_low_range_{w}"] = ((high - low) / close).rolling(w).mean()
 
-        # --- Технические индикаторы ---
         f["rsi_14"] = rsi(close, 14)
 
         macd_line, macd_sig, macd_h = macd(close)
@@ -193,7 +155,7 @@ class FeatureGenerator:
         f["atr_14"] = atr(high, low, close, 14)
 
         f["obv"] = obv(close, volume)
-        # Нормализуем OBV через z-score в скользящем окне
+        # z-score OBV в скользящем окне
         f["obv_zscore"] = (
             (f["obv"] - f["obv"].rolling(60).mean())
             / f["obv"].rolling(60).std().replace(0, np.nan)
@@ -208,21 +170,17 @@ class FeatureGenerator:
         f["adx_14"] = adx(high, low, close, 14)
 
         tenkan_s, kijun_s, senkou_a, senkou_b = ichimoku(high, low)
-        # Используем относительные значения Ichimoku
         f["ichimoku_tenkan_vs_close"] = (tenkan_s - close) / close
         f["ichimoku_kijun_vs_close"] = (kijun_s - close) / close
         f["ichimoku_cloud_width"] = (senkou_a - senkou_b) / close
 
-        # --- Объёмные индикаторы ---
         f["volume_ma_ratio"] = volume / volume.rolling(20).mean().replace(0, np.nan)
         f["price_volume_trend"] = (close.pct_change() * volume).cumsum()
-        # Нормализуем PVT через z-score
         f["pvt_zscore"] = (
             (f["price_volume_trend"] - f["price_volume_trend"].rolling(60).mean())
             / f["price_volume_trend"].rolling(60).std().replace(0, np.nan)
         )
 
-        # --- Календарные факторы ---
         if hasattr(df.index, "dayofweek"):
             dow = df.index.dayofweek
         else:
@@ -238,7 +196,6 @@ class FeatureGenerator:
         f["month_sin"] = np.sin(2 * np.pi * month / 12)
         f["month_cos"] = np.cos(2 * np.pi * month / 12)
 
-        # --- Межрыночные признаки ---
         if usdrub is not None:
             usdrub_aligned = usdrub.reindex(df.index, method="ffill")
             f["usdrub_ret_5"] = usdrub_aligned.pct_change(5)
@@ -251,36 +208,25 @@ class FeatureGenerator:
             f["brent_ret_20"] = brent_aligned.pct_change(20)
 
             if usdrub is not None:
-                # Brent в рублях
                 brent_rub = brent_aligned * usdrub_aligned
                 f["brent_rub_ret_5"] = brent_rub.pct_change(5)
-                # Скользящая корреляция нефть-рубль (30 дней)
+                # скользящая корреляция нефть-рубль (30 дней)
                 f["oil_rub_corr_30"] = (
                     brent_aligned.pct_change()
                     .rolling(30)
                     .corr(usdrub_aligned.pct_change())
                 )
 
-        # Убираем строки с NaN (из-за окон)
         return f.dropna()
 
 
 class TargetGenerator:
-    """Формирование бинарной целевой переменной (forward returns > 0)."""
+    """Бинарная целевая переменная (forward return > 0)."""
 
     def __init__(self, horizon: int = 5):
         self.horizon = horizon
 
     def generate(self, df: pd.DataFrame) -> pd.Series:
-        """
-        Parameters
-        ----------
-        df : pd.DataFrame
-            Данные с колонкой 'close'.
-
-        Returns
-        -------
-        pd.Series — 1 если forward return > 0, иначе 0.
-        """
+        """Возвращает 1 если forward return > 0, иначе 0."""
         fwd = df["close"].pct_change(self.horizon).shift(-self.horizon)
         return (fwd > 0).astype(int).rename(f"target_{self.horizon}d")
