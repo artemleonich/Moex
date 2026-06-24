@@ -1,5 +1,7 @@
 # синтетические данные для тестов (калиброваны под MOEX)
 
+import hashlib
+
 import numpy as np
 import pandas as pd
 
@@ -108,7 +110,12 @@ def generate_ohlcv(
 ) -> pd.DataFrame:
     """Дневные OHLCV данные, калиброванные под реальный MOEX."""
     params = TICKER_PARAMS.get(ticker, TICKER_PARAMS["SBER"])
-    rng = np.random.RandomState(seed + hash(ticker) % 10000)
+    # Use a stable hash for the ticker name so that the generated series is
+    # reproducible across Python processes. The built-in `hash()` is seeded
+    # per-process by PYTHONHASHSEED, which would otherwise cause different
+    # synthetic data on every run and break backtest reproducibility.
+    ticker_hash = int(hashlib.md5(ticker.encode("utf-8")).hexdigest(), 16) % 10000
+    rng = np.random.RandomState(seed + ticker_hash)
 
     dates = pd.bdate_range(start=start, end=end)
     n = len(dates)
