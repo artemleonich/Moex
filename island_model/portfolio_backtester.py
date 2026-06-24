@@ -200,6 +200,15 @@ class PortfolioBacktester:
             print(f"    Недостаточно данных для бэктеста ({len(all_dates)} дней)")
             return result
 
+        # Precompute a per-day close-price lookup table so the hot
+        # _portfolio_value() path inside the main day loop runs in O(K)
+        # instead of O(K * log N) per call (the old ``date in ohlcv_t.index``
+        # path was O(N) for unsorted DatetimeIndex, making the whole
+        # backtest O(K * N^2) on this method alone).
+        self._price_cache: dict[pd.Timestamp, dict[str, float]] = self._build_price_cache(
+            ticker_datasets
+        )
+
         # Начало торговли — после первого обучения
         start_idx = self.train_days + self.embargo_days + self.costs.execution_delay_days + 1
 
@@ -280,7 +289,7 @@ class PortfolioBacktester:
                 if signals.get(ticker, 0.5) > 0.55 and n_longs > 0:
                     # Аллокация: равномерная среди long-сигналов, с ограничением на тикер
                     alloc = min(1.0 / n_longs, self.max_position_pct)
-                    target_value = (cash + self._portfolio_value(positions, ohlcv, current_date, ticker_datasets)) * alloc
+                    target_value = (cash + self._portfolio_value(positions, current_date)) * alloc
                     target_shares = int(target_value / (current_price * lot_size)) * lot_size
                     target_positions[ticker] = target_shares
                 else:
@@ -384,14 +393,53 @@ class PortfolioBacktester:
 
         return result
 
-    def _portfolio_value(self, positions, ohlcv, date, all_datasets):
-        """Текущая стоимость позиций."""
-        value = 0
+    @staticmethod
+    def _build_price_cache(
+        ticker_datasets: dict[str, tuple[pd.DataFrame, pd.Series, pd.DataFrame]],
+    ) -> dict[pd.Timestamp, dict[str, float]]:
+        """Precompute ``{date: {ticker: close_price}}`` for O(1) per-day lookups.
+
+        Building this once turns every subsequent per-day, per-ticker price
+        query inside ``_portfolio_value`` into a dict lookup, instead of an
+        O(N) ``date in ohlcv_t.index`` membership test.
+        """
+        cache: dict[pd.Timestamp, dict[str, float]] = {}
+        for ticker, (_X, _y, ohlcv) in ticker_datasets.items():
+            if ohlcv.empty or "close" not in ohlcv.columns:
+                continue
+            for date, close in ohlcv["close"].items():
+                if pd.notna(close):
+                    cache.setdefault(date, {})[ticker] = float(close)
+        return cache
+
+    def _portfolio_value(
+        self,
+        positions: dict[str, int],
+        date: pd.Timestamp,
+    ) -> float:
+        """Current value of positions on ``date`` (uses the cache from ``run()``).
+
+        Runs in O(K) where K is the number of held tickers. Requires
+        ``self._price_cache`` to be populated — ``run()`` does this
+        automatically before the main loop. Direct external callers
+        must populate the cache themselves or use ``_build_price_cache``.
+        """
+        cache = getattr(self, "_price_cache", None)
+        if not cache:
+            raise RuntimeError(
+                "_portfolio_value requires _price_cache to be populated; "
+                "call backtester.run() first, or backtester._build_price_cache(...) "
+                "to populate the cache manually."
+            )
+        day_prices = cache.get(date)
+        if not day_prices:
+            return 0.0
+        value = 0.0
         for ticker, shares in positions.items():
-            if shares > 0 and ticker in all_datasets:
-                _, _, ohlcv_t = all_datasets[ticker]
-                if date in ohlcv_t.index:
-                    value += shares * ohlcv_t.loc[date, "close"]
+            if shares > 0:
+                close = day_prices.get(ticker)
+                if close is not None:
+                    value += shares * close
         return value
 
 
