@@ -47,7 +47,14 @@ class IslandForestModel(BaseEstimator, ClassifierMixin):
 
     def _create_island(self, idx):
         """Создание острова с уникальными гиперпараметрами."""
-        cfg = self.ISLAND_CONFIGS[idx % len(self.ISLAND_CONFIGS)]
+        # Deep-copy the config dict so that mutating ISLAND_CONFIGS (either
+        # directly on the class or on one instance) cannot bleed into
+        # other instances, fit calls, or future instantiations. The
+        # class-level ISLAND_CONFIGS is a shared mutable list of dicts;
+        # without this copy sklearn's set_params() stores references to
+        # the original dicts, which is a foot-gun during hyperparameter
+        # search and any code that customises islands per-instance.
+        cfg = copy.deepcopy(self.ISLAND_CONFIGS[idx % len(self.ISLAND_CONFIGS)])
         # Каждый 3-й остров — ExtraTrees для дополнительного разнообразия
         cls = ExtraTreesClassifier if idx % 3 == 2 else RandomForestClassifier
         return cls(

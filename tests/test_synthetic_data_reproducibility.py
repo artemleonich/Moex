@@ -25,7 +25,8 @@ def _run_generate_ohlcv_subprocess(ticker: str = "SBER") -> str:
         import sys, os
         sys.path.insert(0, {str(REPO_ROOT)!r})
         from island_model.synthetic_data import generate_ohlcv
-        df = generate_ohlcv({ticker!r}, start='2024-01-01', end='2024-03-31')
+        # Note: generate_ohlcv returns (df, params) tuple — see synthetic_data.py:224
+        df, _params = generate_ohlcv({ticker!r}, start='2024-01-01', end='2024-03-31')
         print(','.join(f'{{x:.10f}}' for x in df['close'].tolist()))
         """
     )
