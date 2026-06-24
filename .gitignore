@@ -10,3 +10,6 @@ downloaded_data/qsh_files/
 dist/
 build/
 .env
+.venv/
+venv/
+.pytest_cache/

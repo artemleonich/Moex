@@ -1,16 +1,75 @@
 # Загрузка исторических данных MOEX через ISS API (apimoex)
 
+from typing import Optional
+
 import requests
 import apimoex
 import pandas as pd
 import numpy as np
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+
+DEFAULT_TIMEOUT = 30           # seconds — prevents hanging on stalled TCP sockets
+DEFAULT_MAX_RETRIES = 3        # retry count for transient HTTP/connection errors
+DEFAULT_BACKOFF_FACTOR = 0.5   # exponential backoff base: 0.5s, 1s, 2s, ...
+DEFAULT_RETRY_STATUS = (429, 500, 502, 503, 504)
+
+
+class _TimeoutSession(requests.Session):
+    """``requests.Session`` subclass that injects a default ``timeout`` kwarg.
+
+    Funnels all HTTP calls — including those made by third-party libs that
+    accept a Session object (e.g. ``apimoex``) — through a single
+    ``request()`` override so we never hang on stalled TCP sockets.
+    """
+
+    def __init__(self, default_timeout: int = DEFAULT_TIMEOUT):
+        super().__init__()
+        self._default_timeout = default_timeout
+
+    def request(self, method, url, **kwargs):  # type: ignore[override]
+        kwargs.setdefault("timeout", self._default_timeout)
+        return super().request(method, url, **kwargs)
+
+
+def _build_session(
+    timeout: int = DEFAULT_TIMEOUT,
+    max_retries: int = DEFAULT_MAX_RETRIES,
+    backoff_factor: float = DEFAULT_BACKOFF_FACTOR,
+    status_forcelist: tuple[int, ...] = DEFAULT_RETRY_STATUS,
+) -> requests.Session:
+    """Build a hardened requests.Session with retry policy and default timeout."""
+    session: requests.Session = _TimeoutSession(default_timeout=timeout)
+
+    retry = Retry(
+        total=max_retries,
+        backoff_factor=backoff_factor,
+        status_forcelist=status_forcelist,
+        allowed_methods=("GET",),
+        raise_on_status=False,
+        respect_retry_after_header=True,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
 
 
 class MOEXDataLoader:
     """Загружает OHLCV свечи и индексные данные через MOEX ISS API."""
 
-    def __init__(self):
-        self.session = requests.Session()
+    def __init__(
+        self,
+        timeout: int = DEFAULT_TIMEOUT,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+    ):
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self.session: requests.Session = _build_session(
+            timeout=timeout,
+            max_retries=max_retries,
+        )
 
     def load_candles(
         self,
