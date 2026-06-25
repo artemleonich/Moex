@@ -9,7 +9,13 @@ from datetime import datetime, timedelta
 import pandas as pd
 
 
-# TODO: поддержать другие stream types кроме Deals (Quotes 0x10, OwnOrders и т.д.)
+# Streaming support roadmap is tracked as GitHub issues, not inline
+# comments in source. See:
+#   - Quotes stream (type 0x20) — issue #8
+#   - OwnOrders stream          — issue #9
+# The previous version of this file had two dangling roadmap comments
+# that shipped in releases without ever being actioned. Moving them
+# to issues makes them searchable, assignable, and impossible to lose.
 
 def read_byte(stream: io.BytesIO) -> int:
     b = stream.read(1)
@@ -270,7 +276,9 @@ class QshParser:
             df = df.set_index("timestamp").sort_index()
         return df
 
-    # TODO: добавить weighted avg price в ohlcv (vwap)
+    # Weighted-avg-price (VWAP) column tracked as GitHub issue #10.
+    # Inline roadmap comment removed so the only roadmap-tracking
+    # surface in this codebase is the issue tracker.
     def to_ohlcv(self, freq: str = "1min") -> pd.DataFrame:
         """Агрегация тиков в OHLCV свечи (freq: '1min', '5min', '1h', '1D')."""
         df = self.to_dataframe()
