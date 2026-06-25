@@ -22,7 +22,9 @@ def rsi(close: pd.Series, window: int = 14) -> pd.Series:
     return (100 - 100 / (1 + rs)).rename("rsi")
 
 
-def macd(close: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):
+def macd(
+    close: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
     ema_fast = _ema(close, fast)
     ema_slow = _ema(close, slow)
     macd_line = ema_fast - ema_slow
@@ -31,7 +33,9 @@ def macd(close: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):
     return macd_line.rename("macd"), signal_line.rename("macd_signal"), histogram.rename("macd_hist")
 
 
-def bollinger_bands(close: pd.Series, window: int = 20, num_std: float = 2.0):
+def bollinger_bands(
+    close: pd.Series, window: int = 20, num_std: float = 2.0,
+) -> tuple[pd.Series, pd.Series]:
     sma = _sma(close, window)
     std = close.rolling(window).std()
     upper = sma + num_std * std
@@ -56,8 +60,10 @@ def obv(close: pd.Series, volume: pd.Series) -> pd.Series:
     return (sign * volume).cumsum().rename("obv")
 
 
-def stochastic(high: pd.Series, low: pd.Series, close: pd.Series,
-               k_window: int = 14, d_window: int = 3):
+def stochastic(
+    high: pd.Series, low: pd.Series, close: pd.Series,
+    k_window: int = 14, d_window: int = 3,
+) -> tuple[pd.Series, pd.Series]:
     lowest = low.rolling(k_window).min()
     highest = high.rolling(k_window).max()
     k = 100 * (close - lowest) / (highest - lowest).replace(0, np.nan)
@@ -103,8 +109,10 @@ def adx(high: pd.Series, low: pd.Series, close: pd.Series,
     return dx.ewm(alpha=1 / window, min_periods=window).mean().rename("adx")
 
 
-def ichimoku(high: pd.Series, low: pd.Series,
-             tenkan: int = 9, kijun: int = 26, senkou_b: int = 52):
+def ichimoku(
+    high: pd.Series, low: pd.Series,
+    tenkan: int = 9, kijun: int = 26, senkou_b: int = 52,
+) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series, pd.Series]:
     tenkan_sen = (high.rolling(tenkan).max() + low.rolling(tenkan).min()) / 2
     kijun_sen = (high.rolling(kijun).max() + low.rolling(kijun).min()) / 2
     senkou_a = ((tenkan_sen + kijun_sen) / 2).shift(kijun)

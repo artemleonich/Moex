@@ -443,7 +443,12 @@ class PortfolioBacktester:
         return value
 
 
-def run_buy_and_hold_portfolio(initial_capital, ticker_datasets, costs, lot_sizes):
+def run_buy_and_hold_portfolio(
+    initial_capital: float,
+    ticker_datasets: dict,
+    costs: "TradingCosts",
+    lot_sizes: dict[str, int],
+) -> "PortfolioBacktestResult":
     """Buy & Hold бенчмарк: покупаем в первый день, держим до конца."""
     result = PortfolioBacktestResult(initial_capital=initial_capital)
     cash = initial_capital

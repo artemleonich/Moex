@@ -221,7 +221,10 @@ class WalkForwardBacktester:
         return result
 
 
-def run_buy_and_hold(returns, test_indices):
+def run_buy_and_hold(
+    returns: pd.Series | np.ndarray,
+    test_indices: list[tuple[int, int]],
+) -> "BacktestResult":
     """Бенчмарк Buy & Hold — всегда long."""
     result = BacktestResult(model_name="Buy & Hold")
     ret_vals = returns.values if hasattr(returns, "values") else np.asarray(returns)
@@ -253,7 +256,7 @@ def run_buy_and_hold(returns, test_indices):
     return result
 
 
-def print_comparison(results):
+def print_comparison(results: list["BacktestResult"]) -> None:
     """Печать сравнительной таблицы."""
     summaries = [r.summary() for r in results]
     df = pd.DataFrame(summaries).set_index("model")

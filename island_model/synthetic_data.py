@@ -107,8 +107,26 @@ def generate_ohlcv(
     end: str = "2024-12-31",
     seed: int = 42,
     common_factors: tuple | None = None,
-) -> pd.DataFrame:
-    """Дневные OHLCV данные, калиброванные под реальный MOEX."""
+) -> tuple[pd.DataFrame, dict]:
+    """Дневные OHLCV данные, калиброванные под реальный MOEX.
+
+    Returns
+    -------
+    (df, params) : tuple[pd.DataFrame, dict]
+        df — DataFrame с колонками ``open``, ``close``, ``high``, ``low``,
+        ``volume`` и индексом ``begin`` (DatetimeIndex).
+        params — словарь параметров тикера из ``TICKER_PARAMS``,
+        фактически использованных при генерации (полезно для
+        воспроизводимости и для downstream-кода, который хочет
+        узнать ``daily_vol``, ``sector`` и т.д.).
+
+    .. note::
+        Pre-fix аннотация была ``-> pd.DataFrame`` при том, что функция
+        фактически возвращает кортеж ``(df, params)``. Все существующие
+        вызывающие сайты уже корректно делают ``df, params = generate_ohlcv(...)``
+        (например, ``tests/test_synthetic_data_reproducibility.py:29``).
+        Этот PR чинит только аннотацию, не runtime-поведение.
+    """
     params = TICKER_PARAMS.get(ticker, TICKER_PARAMS["SBER"])
     # Use a stable hash for the ticker name so that the generated series is
     # reproducible across Python processes. The built-in `hash()` is seeded
