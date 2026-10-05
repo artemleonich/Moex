@@ -1,3 +1,7 @@
+<p align="center">
+  <img src=".github/assets/mark.svg" width="40" height="40" alt="MOEX" />
+</p>
+
 <h1 align="center">Moex · Island Forest</h1>
 
 <p align="center">
