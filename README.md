@@ -1,12 +1,11 @@
-<p align="center">
-  <img src=".github/assets/banner.svg" width="100%" alt="Moex · Island Forest" />
-</p>
+<h1 align="center">Moex · Island Forest</h1>
 
-# Moex · Island Forest
+<p align="center">
+  <img src=".github/assets/stack.svg" height="28" alt="Python · Machine Learning · Research" />
+</p>
 
 Исследовательский проект: островной ансамбль Random Forest / ExtraTrees и walk-forward бэктесты на данных Московской биржи.
 
-**Python · scikit-learn · pandas · MOEX ISS**  
 [Быстрый старт](#быстрый-старт) · [Эксперименты](#эксперименты) · [English](#english)
 
 ## Что внутри
