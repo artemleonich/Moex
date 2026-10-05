@@ -1,11 +1,11 @@
 <p align="center">
-  <img src=".github/assets/mark.svg" width="40" height="40" alt="MOEX" />
+  <a href=".github/assets/light/mark.svg#gh-light-mode-only"><img src=".github/assets/light/mark.svg" width="40" height="40" alt="MOEX" /></a><a href=".github/assets/mark.svg#gh-dark-mode-only"><img src=".github/assets/mark.svg" width="40" height="40" alt="MOEX" /></a>
 </p>
 
 <h1 align="center">Moex · Island Forest</h1>
 
 <p align="center">
-  <img src=".github/assets/stack.svg" height="28" alt="Python · Machine Learning · Research" />
+  <a href=".github/assets/light/stack.svg#gh-light-mode-only"><img src=".github/assets/light/stack.svg" height="28" alt="Python · Machine Learning · Research" /></a><a href=".github/assets/stack.svg#gh-dark-mode-only"><img src=".github/assets/stack.svg" height="28" alt="Python · Machine Learning · Research" /></a>
 </p>
 
 Исследовательский проект: островной ансамбль Random Forest / ExtraTrees и walk-forward бэктесты на данных Московской биржи.
